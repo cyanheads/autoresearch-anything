@@ -1,0 +1,138 @@
+{# Resolve agent-level overrides or fall back to manifest defaults #}
+{% set artifacts = agent.artifacts if agent else manifest.artifacts %}
+{% set strategy = agent.strategy if agent else manifest.strategy %}
+{% set constraints = agent.constraints if agent else manifest.constraints %}
+{% set context_sources = agent.context if agent else manifest.context %}
+# {{ manifest.name }}{% if agent %} — {{ agent.name }}{% endif %}
+
+{{ manifest.description }}
+{% if agent %}
+
+## Your Role
+
+{{ agent.role }}
+{% endif %}
+
+## Setup
+
+To set up a new experiment run, work with the user to:
+
+1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar11`). The branch `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` must not already exist — this is a fresh run.
+2. **Create the branch**: `git checkout -b experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` from current state.
+3. **Read the in-scope files** for full context:
+{% for artifact in artifacts %}
+   - `{{ artifact.path }}` — {{ artifact.description | trim }}. **You modify this.**
+{% endfor %}
+{% for ctx in context_sources %}
+{% if ctx.path %}
+   - `{{ ctx.path }}`{% if ctx.description %} — {{ ctx.description | trim }}{% endif %}
+
+{% endif %}
+{% endfor %}
+4. **Initialize results log**: Create `{{ manifest.log.path }}` with the header row:
+   ```
+   {{ manifest.log.columns | join('\t' if manifest.log.format.value == 'tsv' else ',') }}
+   ```
+5. **Confirm and go**: Confirm setup looks good with the user.
+
+Once you get confirmation, kick off the experimentation loop.
+
+## Rules
+
+**What you CAN modify:**
+{% for artifact in artifacts %}
+- `{{ artifact.path }}` — {{ artifact.description | trim }}
+{% endfor %}
+
+**What you CANNOT modify:**
+{% for immutable in manifest.immutable %}
+- `{{ immutable.path }}` — {{ immutable.reason }}
+{% endfor %}
+{% if not manifest.immutable %}
+- (No explicit restrictions beyond the artifacts listed above)
+{% endif %}
+
+## Evaluation
+
+To run an experiment:
+
+```
+{{ manifest.evaluate.command }}
+```
+
+{% if manifest.evaluate.timeout %}
+**Timeout**: {{ manifest.evaluate.timeout }} seconds. If a run exceeds this, kill it and treat as failure.
+{% endif %}
+
+### Metrics
+{% for metric in manifest.evaluate.metrics %}
+
+- **{{ metric.name }}**{% if metric.primary %} (PRIMARY — this decides keep/discard){% endif %}: {{ metric.direction.value }}
+  Extract: `{{ metric.extract }}`
+{% if metric.constraint %}
+{% if metric.constraint.max is not none %}
+  Constraint: must be ≤ {{ metric.constraint.max }}
+{% endif %}
+{% if metric.constraint.min is not none %}
+  Constraint: must be ≥ {{ metric.constraint.min }}
+{% endif %}
+{% endif %}
+{% endfor %}
+
+### Detecting failure
+{% for signal in manifest.evaluate.crash_signals %}
+- {{ signal }}
+{% endfor %}
+- If the primary metric (`{{ primary.name }}`) cannot be extracted from output, the run crashed.
+
+## Strategy
+
+**{{ strategy.type }}**: {{ strategy.keep_when }}.
+
+{% if strategy.baseline == 'first_run' %}
+**The first run** should always establish the baseline — run the experiment as-is before making any changes.
+{% endif %}
+
+{% if strategy.on_discard.value == 'revert' %}
+When a change doesn't improve `{{ primary.name }}`, revert: `git reset --hard HEAD~1` back to the last successful commit.
+{% elif strategy.on_discard.value == 'branch' %}
+When a change doesn't improve `{{ primary.name }}`, discard the commit but keep the branch — don't revert, just note it and move on.
+{% endif %}
+
+## Logging
+
+Log every experiment to `{{ manifest.log.path }}` ({{ manifest.log.format.value }}-formatted).
+
+Columns: {{ manifest.log.columns | join(' | ') }}
+
+{% if manifest.log.format.value == 'tsv' %}
+Use **tabs** as separators (not commas — commas break in descriptions).
+{% endif %}
+Do NOT commit the results log — leave it untracked by git.
+
+## The Experiment Loop
+
+LOOP FOREVER:
+
+1. **Review state**: current branch, recent results, what's been tried so far.
+2. **Hypothesize**: what change might improve `{{ primary.name }}`?
+3. **Modify** the artifact(s) with your change.
+4. **Commit**: `git commit` the change with a short description.
+5. **Run**: `{{ manifest.evaluate.command }}`
+6. **Extract metrics**:
+{% for metric in manifest.evaluate.metrics %}
+   - `{{ metric.extract }}`
+{% endfor %}
+7. **Log** the result to `{{ manifest.log.path }}`.
+8. **Decide**:
+   - If `{{ primary.name }}` improved → **keep** the commit.
+   - If `{{ primary.name }}` is equal or worse → **discard** (revert to last keeper).
+9. **Repeat**.
+
+**NEVER STOP**: Once the experiment loop has begun, do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep or away and expects you to continue working *indefinitely* until manually stopped. If you run out of ideas, think harder — re-read the artifacts and context for new angles, try combining previous near-misses, try more radical changes. The loop runs until the human interrupts you.
+
+**Crashes**: If a run crashes with a fixable issue (typo, missing import), fix and re-run. If fundamentally broken, log as crash and move on. After {{ constraints.max_consecutive_failures }} consecutive failures on the same idea, step back and try a completely different approach.
+
+{% if constraints.time_budget_per_run %}
+**Time budget**: Each experiment should complete within ~{{ constraints.time_budget_per_run }} seconds. If a run exceeds {{ manifest.evaluate.timeout }} seconds, kill it and treat as failure.
+{% endif %}
