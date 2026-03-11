@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0] - 2026-03-11
+
+### Added
+
+- **Mandatory checklist format** for first-time setup and resume flows in agent entry points (`CLAUDE.md`, `AGENTS.md`) and generated `program.md` — checkbox task lists with explicit ordering and failure-stop semantics replace numbered lists
+- **New setup steps**: validate manifest, install experiment dependencies, and switch to experiment branch are now required before experimenting
+- **Detailed `validate` output** — `autoresearch validate` now prints mutable artifacts with descriptions, immutable files with reasons, all metrics (primary flag, constraints), strategy (keep_when, on_discard), constraints, and evaluation command/timeout
+
+### Changed
+
+- `cmd_validate` in `cli.py` restructured from summary one-liners to sectioned detail output
+- `program.md.jinja` setup section uses checkbox format with MANDATORY header
+- `pyproject.toml` adds empty `[project.optional-dependencies]` section for future use
+
 ## [0.4.0] - 2026-03-11
 
 ### Added
