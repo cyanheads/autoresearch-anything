@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.2.0] - 2026-03-11
+
+### Added
+
+- **Experiment lineage tracking**: log columns now include `experiment` (sequential number), `parent` (commit the change branched from), and `tags` (freeform categorization labels)
+- **Column reference** in generated `program.md` — documents every log column so agents know exactly what to record
+- **Park status**: experiments that don't improve the primary metric but show promise can be parked (`git tag parked/<n>-<name>`) for later revisitation, alongside existing keep/discard/crash statuses
+- **Conversation starter** in agent entry points (`CLAUDE.md`, `AGENTS.md`) — agents now introduce the framework and ask what to work on when no problem is specified
+
+### Changed
+
+- Default log columns updated from `[commit, status, description]` to `[experiment, parent, commit, status, description, tags]` in manifest schema, CLI scaffold, and all example experiments
+- Experiment loop in `program.md.jinja` now tracks parent commits, records experiment numbers, and uses tags for categorizing approaches
+- Logging instructions strengthened: "every" experiment must be logged including crashes and discards
+
 ## [0.1.0] - 2026-03-11
 
 Complete rewrite of Karpathy's [autoresearch](https://github.com/karpathy/autoresearch) into a general-purpose autonomous experimentation framework.

@@ -132,7 +132,14 @@ class LogConfig(BaseModel):
     format: LogFormat = LogFormat.tsv
     path: str = "results.tsv"
     columns: list[str] = Field(
-        default_factory=lambda: ["commit", "status", "description"]
+        default_factory=lambda: [
+            "experiment",
+            "parent",
+            "commit",
+            "status",
+            "description",
+            "tags",
+        ]
     )
 
 

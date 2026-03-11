@@ -71,9 +71,12 @@ log:
   format: tsv
   path: results.tsv
   columns:
+    - experiment
+    - parent
     - commit
     - val_bpb
     - peak_vram_mb
     - mfu_percent
     - status
     - description
+    - tags

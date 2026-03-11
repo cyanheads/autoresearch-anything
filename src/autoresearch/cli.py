@@ -82,7 +82,7 @@ context: []
 log:
   format: tsv
   path: results.tsv
-  columns: [commit, score, status, description]
+  columns: [experiment, parent, commit, score, status, description, tags]
 
 # Optional: custom Jinja template for agent instructions
 # template: program.md.jinja

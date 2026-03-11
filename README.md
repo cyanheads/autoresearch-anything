@@ -91,7 +91,7 @@ constraints:                            # Limits
 log:                                    # Result tracking
   format: tsv
   path: results.tsv
-  columns: [commit, val_loss, status, description]
+  columns: [experiment, parent, commit, val_loss, status, description, tags]
 ```
 
 ## Multi-agent

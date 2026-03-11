@@ -101,9 +101,20 @@ When a change doesn't improve `{{ primary.name }}`, discard the commit but keep 
 
 ## Logging
 
-Log every experiment to `{{ manifest.log.path }}` ({{ manifest.log.format.value }}-formatted).
+Log **every** experiment to `{{ manifest.log.path }}` ({{ manifest.log.format.value }}-formatted), including crashes and discards.
 
 Columns: {{ manifest.log.columns | join(' | ') }}
+
+### Column reference
+
+- **experiment**: sequential experiment number (1, 2, 3, ...)
+- **parent**: short commit hash this experiment branched from — the state of the code *before* your change. For experiment 1, use `baseline`.
+- **commit**: short commit hash of the change you made
+- **status**: one of `keep`, `discard`, `crash`, or `park`
+- **description**: what you changed and why (one line)
+- **tags**: freeform comma-separated labels for categorization (e.g. `architecture,attention`, `optimizer,lr`, `radical`)
+
+Any metric-specific columns (e.g. `{{ primary.name }}`) contain the extracted numeric value, or empty if the run crashed.
 
 {% if manifest.log.format.value == 'tsv' %}
 Use **tabs** as separators (not commas — commas break in descriptions).
@@ -114,8 +125,8 @@ Do NOT commit the results log — leave it untracked by git.
 
 LOOP FOREVER:
 
-1. **Review state**: current branch, recent results, what's been tried so far.
-2. **Hypothesize**: what change might improve `{{ primary.name }}`?
+1. **Review state**: current branch, recent results in `{{ manifest.log.path }}`, what's been tried and what tags/approaches are underexplored.
+2. **Hypothesize**: what change might improve `{{ primary.name }}`? Note the current commit hash — this is your `parent`.
 3. **Modify** the artifact(s) with your change.
 4. **Commit**: `git commit` the change with a short description.
 5. **Run**: `{{ manifest.evaluate.command }}`
@@ -123,10 +134,11 @@ LOOP FOREVER:
 {% for metric in manifest.evaluate.metrics %}
    - `{{ metric.extract }}`
 {% endfor %}
-7. **Log** the result to `{{ manifest.log.path }}`.
+7. **Log** the result to `{{ manifest.log.path }}`, including `experiment` number, `parent` commit, current `commit`, all metrics, `status`, `description`, and `tags`.
 8. **Decide**:
-   - If `{{ primary.name }}` improved → **keep** the commit.
-   - If `{{ primary.name }}` is equal or worse → **discard** (revert to last keeper).
+   - If `{{ primary.name }}` improved → **keep** the commit. Status: `keep`.
+   - If `{{ primary.name }}` is equal or worse but the idea has promise (novel direction, partial improvement on secondary metrics, worth revisiting later) → **park** it: tag the commit with `git tag parked/<experiment-number>-<short-name>`, then revert. Status: `park`.
+   - If `{{ primary.name }}` is equal or worse with no redeeming qualities → **discard** and revert. Status: `discard`.
 9. **Repeat**.
 
 **NEVER STOP**: Once the experiment loop has begun, do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep or away and expects you to continue working *indefinitely* until manually stopped. If you run out of ideas, think harder — re-read the artifacts and context for new angles, try combining previous near-misses, try more radical changes. The loop runs until the human interrupts you.

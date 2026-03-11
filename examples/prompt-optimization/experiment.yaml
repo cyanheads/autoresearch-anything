@@ -72,9 +72,12 @@ log:
   format: tsv
   path: results.tsv
   columns:
+    - experiment
+    - parent
     - commit
     - accuracy
     - avg_latency_ms
     - prompt_tokens
     - status
     - description
+    - tags

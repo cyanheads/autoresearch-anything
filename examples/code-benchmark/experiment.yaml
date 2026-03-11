@@ -75,12 +75,15 @@ log:
   format: tsv
   path: results.tsv
   columns:
+    - experiment
+    - parent
     - commit
     - ops_per_sec
     - correctness
     - peak_memory_mb
     - status
     - description
+    - tags
 
 # Multi-agent: two agents with different strategies
 agents:
