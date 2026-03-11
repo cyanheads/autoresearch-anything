@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0] - 2026-03-11
+
+### Added
+
+- **Strategies section** in agent entry points (`CLAUDE.md`, `AGENTS.md`) — documents hill-climb, explore, and pareto strategies with concrete `keep_when` examples
+- **Experiment lifecycle section** in `README.md` — explains keep/discard/park/crash statuses and lineage tracking
+- **Example results table** in `README.md` quick start — shows what a typical results log looks like
+
+### Changed
+
+- `program.md.jinja` strips trailing periods from artifact descriptions for consistent formatting
+- `program.md.jinja` deduplicates context sources that are already listed as artifacts
+- `program.py` registers `rstrip_period` Jinja filter for template use
+
 ## [0.3.0] - 2026-03-11
 
 ### Added

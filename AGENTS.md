@@ -41,6 +41,27 @@ uv run autoresearch generate <manifest> -o <dir>       # Generate program.md fro
 uv run autoresearch validate <manifest>                # Check experiment.yaml for errors
 ```
 
+## Strategies
+
+When setting up `experiment.yaml`, choose the strategy that fits the problem:
+
+- **hill-climb**: Keep any change that improves the primary metric. Best for well-understood problems where incremental gains compound — hyperparameter tuning, prompt refinement, optimizing a known algorithm.
+- **explore**: Tolerate more crashes and regressions in exchange for novelty. Park aggressively — ideas that don't improve the primary metric but show secondary promise are worth saving. Best for open-ended problems with large search spaces — architecture search, novel algorithms, creative tasks.
+- **pareto**: Multi-objective. Keep if any metric improves without worsening others. Best when you're balancing competing concerns — accuracy vs. latency, loss vs. memory, quality vs. speed.
+
+The `keep_when` field is freeform text that refines the strategy — it's injected directly into the agent's instructions. Be specific:
+
+```yaml
+# Too vague
+keep_when: score improves
+
+# Better
+keep_when: val_loss improves, or extrap_loss drops >10% at similar val_loss
+
+# Multi-objective
+keep_when: accuracy improves without increasing latency, or latency drops >20% at same accuracy
+```
+
 ## Key rules
 
 - **Read `program.md` before experimenting.** It has everything: what to modify, how to evaluate, decision rules, logging format.

@@ -49,7 +49,16 @@ The agent will:
 3. Generate its own `program.md` with the full experiment protocol
 4. Run the baseline, then iterate autonomously
 
-You sleep. The agent experiments. You wake up to `results.tsv` and a git history of accumulated improvements.
+You sleep. The agent experiments. You wake up to a results log and a git history of accumulated improvements:
+
+```
+experiment  parent   commit   val_loss  status   description                          tags
+1           baseline a3f2e1c  4.21      keep     baseline run, no changes             baseline
+2           a3f2e1c  b7d4a9e  4.05      keep     switch to RMSNorm                    normalization
+3           b7d4a9e  c1e8f3a  4.12      discard  replace attention with linear attn   architecture,attention
+4           b7d4a9e  d9a2b5c  3.98      keep     increase depth to 8 layers           architecture
+5           d9a2b5c  e4f7c2d  3.99      park     learned positional frequencies       position,experimental
+```
 
 ## The experiment manifest
 
@@ -156,6 +165,17 @@ examples/
     prompt-optimization/   LLM prompt iteration
     code-benchmark/        Algorithm performance (multi-agent)
 ```
+
+## Experiment lifecycle
+
+Every experiment is a git commit. The agent decides what to do with each one:
+
+- **keep** — primary metric improved. Commit stays, becomes the new baseline.
+- **discard** — no improvement, no promise. Reverted.
+- **park** — didn't beat the primary metric, but showed promise (novel direction, secondary metric improvement). Tagged with `git tag parked/<N>-<name>` for later retrieval, then reverted. The agent revisits parked experiments when stuck.
+- **crash** — run failed. Logged and moved on.
+
+The `parent` column in results tracks lineage — which commit each experiment branched from. Combined with tags, this gives you a searchable history of what was tried, what worked, and what's worth revisiting.
 
 ## Design
 
