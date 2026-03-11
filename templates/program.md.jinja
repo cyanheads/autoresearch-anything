@@ -34,11 +34,12 @@ To set up a new experiment run, work with the user to:
 2. **Agree on a run tag**: Propose a tag based on today's date (e.g. `mar11`). The branch `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` must not already exist.
 3. **Create the branch**: `git checkout -b experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}`
 4. **Read the in-scope files** for full context:
+{% set artifact_paths = artifacts | map(attribute='path') | list %}
 {% for artifact in artifacts %}
-   - `{{ artifact.path }}` — {{ artifact.description | trim }}. **You modify this.**
+   - `{{ artifact.path }}` — {{ artifact.description | trim | rstrip_period }}. **You modify this.**
 {% endfor %}
 {% for ctx in context_sources %}
-{% if ctx.path %}
+{% if ctx.path and ctx.path not in artifact_paths %}
    - `{{ ctx.path }}`{% if ctx.description %} — {{ ctx.description | trim }}{% endif %}
 
 {% endif %}

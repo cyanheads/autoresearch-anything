@@ -22,15 +22,22 @@ TEMPLATES_DIR = (
 )
 
 
+def _rstrip_period(value: str) -> str:
+    """Strip trailing periods from a string."""
+    return value.rstrip(".")
+
+
 def _make_env(*search_paths: Path) -> Environment:
     """Create a Jinja environment searching the given directories."""
     dirs = [str(p) for p in search_paths if p.exists()]
-    return Environment(
+    env = Environment(
         loader=FileSystemLoader(dirs),
         keep_trailing_newline=True,
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    env.filters["rstrip_period"] = _rstrip_period
+    return env
 
 
 def _resolve_template(
