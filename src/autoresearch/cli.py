@@ -20,9 +20,7 @@ from autoresearch.manifest import load_manifest
 from autoresearch.program import generate_all
 from autoresearch.tracker import init_log
 
-EXAMPLES_DIR = (
-    Path(__file__).resolve().parent.parent.parent / "examples"
-)
+EXAMPLES_DIR = Path(__file__).resolve().parent.parent.parent / "examples"
 
 BLANK_MANIFEST = """\
 # experiment.yaml — define your autonomous experiment
@@ -126,17 +124,12 @@ def cmd_init(args: argparse.Namespace) -> None:
         print("Next steps:")
         print(f"  1. Edit {target}/experiment.yaml")
         print("  2. Create your artifact file(s)")
-        print(
-            f"  3. Run: autoresearch generate "
-            f"{target}/experiment.yaml"
-        )
+        print(f"  3. Run: autoresearch generate " f"{target}/experiment.yaml")
         return
 
     template_dir = EXAMPLES_DIR / template
     if not template_dir.exists():
-        available = sorted(
-            d.name for d in EXAMPLES_DIR.iterdir() if d.is_dir()
-        )
+        available = sorted(d.name for d in EXAMPLES_DIR.iterdir() if d.is_dir())
         print(
             f"Error: template '{template}' not found.",
             file=sys.stderr,
@@ -156,16 +149,10 @@ def cmd_init(args: argparse.Namespace) -> None:
         else:
             shutil.copy2(item, dest)
 
-    print(
-        f"Initialized experiment in {target}/ "
-        f"from '{template}' template."
-    )
+    print(f"Initialized experiment in {target}/ " f"from '{template}' template.")
     print("Next steps:")
     print(f"  1. Edit {target}/experiment.yaml")
-    print(
-        f"  2. Run: autoresearch generate "
-        f"{target}/experiment.yaml"
-    )
+    print(f"  2. Run: autoresearch generate " f"{target}/experiment.yaml")
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
@@ -211,20 +198,54 @@ def cmd_validate(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     print(f"Valid: {manifest.name}")
-    print(
-        f"  Artifacts: "
-        f"{', '.join(a.path for a in manifest.artifacts)}"
-    )
-    primary = manifest.primary_metric
-    print(
-        f"  Primary metric: "
-        f"{primary.name} ({primary.direction.value})"
-    )
-    print(f"  Strategy: {manifest.strategy.type}")
 
+    # Mutable artifacts
+    print("\n  Mutable artifacts:")
+    for a in manifest.artifacts:
+        print(f"    - {a.path}: {a.description.strip()}")
+
+    # Immutable files
+    if manifest.immutable:
+        print("\n  Immutable (DO NOT modify):")
+        for i in manifest.immutable:
+            print(f"    - {i.path}: {i.reason}")
+    else:
+        print("\n  Immutable: (none)")
+
+    # All metrics
+    print("\n  Metrics:")
+    for m in manifest.evaluate.metrics:
+        label = f"{m.name} ({m.direction.value})"
+        if m.primary:
+            label += " [PRIMARY]"
+        if m.constraint:
+            bounds = []
+            if m.constraint.min is not None:
+                bounds.append(f"min={m.constraint.min}")
+            if m.constraint.max is not None:
+                bounds.append(f"max={m.constraint.max}")
+            label += f" constraint: {', '.join(bounds)}"
+        print(f"    - {label}")
+
+    # Strategy
+    print(f"\n  Strategy: {manifest.strategy.type}")
+    print(f"  Keep when: {manifest.strategy.keep_when}")
+    print(f"  On discard: {manifest.strategy.on_discard.value}")
+
+    # Constraints
+    c = manifest.constraints
+    if c.time_budget_per_run:
+        print(f"  Time budget: {c.time_budget_per_run}s/run")
+    print(f"  Max consecutive failures: {c.max_consecutive_failures}")
+
+    # Evaluation
+    print(f"\n  Evaluate: {manifest.evaluate.command}")
+    print(f"  Timeout: {manifest.evaluate.timeout}s")
+
+    # Multi-agent
     if manifest.is_multi_agent:
         agents = manifest.resolved_agents()
-        print(f"  Agents: {', '.join(a.name for a in agents)}")
+        print(f"\n  Agents: {', '.join(a.name for a in agents)}")
 
 
 def main() -> None:
@@ -235,9 +256,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     # init
-    p_init = sub.add_parser(
-        "init", help="Scaffold a new experiment"
-    )
+    p_init = sub.add_parser("init", help="Scaffold a new experiment")
     p_init.add_argument(
         "directory",
         help="Target directory for the new experiment",
@@ -271,9 +290,7 @@ def main() -> None:
     )
 
     # validate
-    p_val = sub.add_parser(
-        "validate", help="Validate experiment.yaml"
-    )
+    p_val = sub.add_parser("validate", help="Validate experiment.yaml")
     p_val.add_argument("manifest", help="Path to experiment.yaml")
 
     args = parser.parse_args()
