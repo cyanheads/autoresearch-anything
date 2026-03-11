@@ -4,34 +4,41 @@ You are an autonomous research agent. This repo is a framework for running exper
 
 ## When the user starts a conversation
 
-If the user hasn't described a problem to work on, briefly introduce what this framework does and ask what they want to experiment on. Once they describe the problem, follow the first time setup flow.
+If the user hasn't described a problem to work on, briefly introduce what this framework does and ask what they want to experiment on. Once they describe the problem, follow the **First time setup** checklist below — every step, in order, no exceptions.
 
 ## What this is
 
 A general-purpose experimentation framework. You define a problem via `experiment.yaml`, generate your own instructions via the CLI, then run an autonomous experiment loop: modify code, run it, measure results, keep or discard, repeat.
 
-## First time setup
+## First time setup — MANDATORY
 
-If there's no `experiment.yaml` in the repo root (or the user tells you what they want to work on):
+**You MUST complete every step below, in order, before running any experiments.** Do not skip steps. Do not reorder. Do not start experimenting until every box is checked. If a step fails, stop and resolve it before continuing.
 
-1. **Install dependencies**: `uv sync`
-2. **Understand what's available**: Read the examples in `examples/` to see what experiment manifests look like
-3. **Scaffold an experiment**: Use `uv run autoresearch init <directory>` for a blank template, or `uv run autoresearch init <directory> -t <example>` to start from an example (available: `gpt-pretrain`, `prompt-optimization`, `code-benchmark`)
-4. **Edit `experiment.yaml`** to match what the user wants to optimize — ask them if anything is unclear
-5. **Create the artifact files** that the experiment needs (training scripts, eval harnesses, prompts, etc.)
-6. **Generate your instructions**: `uv run autoresearch generate <path>/experiment.yaml -o <path>/ --init-log`
-7. **Read the generated `program.md`** — it contains your full experiment loop instructions
-8. Follow the setup steps in `program.md`, then begin the experiment loop
+When there's no `experiment.yaml` in the repo root (or the user tells you what they want to work on):
+
+- [ ] **Install the framework**: Run `uv sync` from the repo root. This installs the `autoresearch` CLI.
+- [ ] **Read the examples**: Read the manifests in `examples/` to understand experiment.yaml structure and what good configurations look like.
+- [ ] **Scaffold the experiment**: Run `uv run autoresearch init <directory>` for a blank template, or `uv run autoresearch init <directory> -t <example>` to start from an example (available: `gpt-pretrain`, `prompt-optimization`, `code-benchmark`).
+- [ ] **Edit `experiment.yaml`**: Tailor it to the user's problem — metrics, evaluation command, strategy, artifacts. Ask the user if anything is unclear.
+- [ ] **Create the artifact files**: Write the scripts, prompts, eval harnesses, or whatever the experiment needs. These are the files listed under `artifacts` in the manifest.
+- [ ] **Validate the manifest**: Run `uv run autoresearch validate <path>/experiment.yaml`. Read the output carefully — it shows every mutable artifact, every immutable file, all metrics (including which is primary and any constraints), the strategy, and the evaluation command. Confirm this matches your intent. If anything is wrong, fix experiment.yaml and re-validate.
+- [ ] **Install experiment dependencies**: If the experiment's artifacts need packages beyond what `uv sync` provides (e.g., torch, transformers, datasets), install them now. Check artifact imports to know what's needed.
+- [ ] **Switch to an experiment branch**: Pick a run tag (e.g., `mar11`) and run `git checkout -b experiment/<tag>`. Never experiment on `main`/`master`.
+- [ ] **Generate your instructions**: Run `uv run autoresearch generate <path>/experiment.yaml -o <path>/ --init-log`. This produces `program.md` and initializes the results log.
+- [ ] **Read `program.md`**: This is your generated playbook — experiment loop, decision rules, logging format, evaluation commands. Read it fully.
+- [ ] **Follow the Setup section in `program.md`**: It has run-specific setup (reading in-scope files, confirming with the user, etc.).
+- [ ] **Begin the experiment loop**: Start with the baseline run, then iterate.
 
 ## Resuming an existing experiment
 
-If `experiment.yaml` already exists and the user wants to continue:
+If `experiment.yaml` already exists and the user wants to continue, complete these steps before resuming:
 
-1. Run `uv run autoresearch generate experiment.yaml -o . --init-log` if `program.md` doesn't exist yet
-2. Read `program.md` for your instructions
-3. Check `results.tsv` for prior results
-4. Check git log for the current experiment branch state
-5. Resume the experiment loop from where it left off
+- [ ] **Install dependencies**: Run `uv sync` if not already done.
+- [ ] **Regenerate if needed**: Run `uv run autoresearch generate experiment.yaml -o . --init-log` if `program.md` doesn't exist.
+- [ ] **Read `program.md`**: Reread your full instructions — don't rely on memory from a prior session.
+- [ ] **Check prior results**: Read `results.tsv` to understand what's been tried and what the current best is.
+- [ ] **Check git state**: Run `git log --oneline -10` and `git branch` to understand where the experiment left off.
+- [ ] **Resume the experiment loop** from where it left off.
 
 ## CLI reference
 

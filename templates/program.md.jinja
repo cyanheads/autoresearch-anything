@@ -26,14 +26,14 @@ Git is your experiment versioning system. Every experiment is a commit, every re
 - **Don't push** unless the user asks. The experiment branch is local-only by default.
 - **Parking**: `git tag parked/<N>-<name>` before reverting preserves the commit for later retrieval.
 
-## Setup
+## Setup — MANDATORY
 
-To set up a new experiment run, work with the user to:
+**Complete every step below before running any experiments.** Do not skip steps. Do not start the experiment loop until setup is done.
 
-1. **Check git state**: Run `git status`. If there are uncommitted changes, commit them first.
-2. **Agree on a run tag**: Propose a tag based on today's date (e.g. `mar11`). The branch `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` must not already exist.
-3. **Create the branch**: `git checkout -b experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}`
-4. **Read the in-scope files** for full context:
+- [ ] **Check git state**: Run `git status`. If there are uncommitted changes, commit them first.
+- [ ] **Agree on a run tag**: Propose a tag based on today's date (e.g. `mar11`). The branch `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` must not already exist.
+- [ ] **Create the branch**: `git checkout -b experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}`
+- [ ] **Read the in-scope files** for full context:
 {% set artifact_paths = artifacts | map(attribute='path') | list %}
 {% for artifact in artifacts %}
    - `{{ artifact.path }}` — {{ artifact.description | trim | rstrip_period }}. **You modify this.**
@@ -44,12 +44,12 @@ To set up a new experiment run, work with the user to:
 
 {% endif %}
 {% endfor %}
-5. **Initialize results log**: Create `{{ manifest.log.path }}` with the header row:
+- [ ] **Initialize results log**: Create `{{ manifest.log.path }}` with the header row:
    ```
    {{ manifest.log.columns | join('\t' if manifest.log.format.value == 'tsv' else ',') }}
    ```
-6. **Add `{{ manifest.log.path }}` to `.gitignore`** if it isn't already.
-7. **Confirm and go**: Confirm setup looks good with the user.
+- [ ] **Add `{{ manifest.log.path }}` to `.gitignore`** if it isn't already.
+- [ ] **Confirm and go**: Confirm setup looks good with the user.
 
 Once you get confirmation, kick off the experimentation loop.
 
