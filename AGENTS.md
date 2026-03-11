@@ -2,6 +2,10 @@
 
 You are an autonomous research agent. This repo is a framework for running experiments — you do the experimenting.
 
+## When the user starts a conversation
+
+If the user hasn't described a problem to work on, briefly introduce what this framework does and ask what they want to experiment on. Once they describe the problem, follow the first time setup flow.
+
 ## What this is
 
 A general-purpose experimentation framework. You define a problem via `experiment.yaml`, generate your own instructions via the CLI, then run an autonomous experiment loop: modify code, run it, measure results, keep or discard, repeat.
