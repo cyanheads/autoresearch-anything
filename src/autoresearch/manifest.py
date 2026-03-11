@@ -207,8 +207,7 @@ class ExperimentManifest(BaseModel):
     agents: Optional[list[AgentConfig]] = Field(
         default=None,
         description=(
-            "Multi-agent configuration. "
-            "If set, generates one program.md per agent."
+            "Multi-agent configuration. " "If set, generates one program.md per agent."
         ),
     )
 

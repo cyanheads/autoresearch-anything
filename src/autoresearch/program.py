@@ -17,9 +17,7 @@ from autoresearch.manifest import (
     ResolvedAgent,
 )
 
-TEMPLATES_DIR = (
-    Path(__file__).resolve().parent.parent.parent / "templates"
-)
+TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates"
 
 
 def _rstrip_period(value: str) -> str:
@@ -78,9 +76,7 @@ def generate_program(
     If `agent` is provided, renders with agent-specific overrides
     (role, strategy, artifacts, constraints).
     """
-    template_name, search_paths = _resolve_template(
-        manifest, manifest_dir
-    )
+    template_name, search_paths = _resolve_template(manifest, manifest_dir)
     env = _make_env(*search_paths)
     template = env.get_template(template_name)
 
@@ -103,16 +99,12 @@ def generate_all(
     """
     if not manifest.is_multi_agent:
         return {
-            "program.md": generate_program(
-                manifest, manifest_dir
-            ),
+            "program.md": generate_program(manifest, manifest_dir),
         }
 
     results: dict[str, str] = {}
     for agent in manifest.resolved_agents():
         filename = f"program-{agent.name}.md"
-        content = generate_program(
-            manifest, manifest_dir, agent=agent
-        )
+        content = generate_program(manifest, manifest_dir, agent=agent)
         results[filename] = content
     return results
