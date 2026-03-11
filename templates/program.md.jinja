@@ -13,13 +13,27 @@
 {{ agent.role }}
 {% endif %}
 
+## Git Protocol
+
+Git is your experiment versioning system. Every experiment is a commit, every revert is clean, and the history tells the full story.
+
+- **Branch per run**: All experiments happen on `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}`. Never experiment on `main`/`master`.
+- **Clean working tree**: Before starting, ensure `git status` is clean. Commit any uncommitted changes first.
+- **Stage explicitly**: Use `git add <file>` for specific files, not `git add .` or `git add -A` — avoid accidentally staging logs, data files, or generated artifacts.
+- **Commit before running**: Every experiment starts with a commit. This ensures `git reset --hard HEAD~1` cleanly reverts a failed experiment.
+- **Commit messages**: Use the format `exp <N>: <short description>` (e.g. `exp 3: switch to RMSNorm, increase depth to 8`).
+- **Don't commit the results log**: `{{ manifest.log.path }}` stays untracked — it's your running record, not part of the experiment state.
+- **Don't push** unless the user asks. The experiment branch is local-only by default.
+- **Parking**: `git tag parked/<N>-<name>` before reverting preserves the commit for later retrieval.
+
 ## Setup
 
 To set up a new experiment run, work with the user to:
 
-1. **Agree on a run tag**: propose a tag based on today's date (e.g. `mar11`). The branch `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` must not already exist — this is a fresh run.
-2. **Create the branch**: `git checkout -b experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` from current state.
-3. **Read the in-scope files** for full context:
+1. **Check git state**: Run `git status`. If there are uncommitted changes, commit them first.
+2. **Agree on a run tag**: Propose a tag based on today's date (e.g. `mar11`). The branch `experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}` must not already exist.
+3. **Create the branch**: `git checkout -b experiment/{{ '<tag>' }}{% if agent %}-{{ agent.name }}{% endif %}`
+4. **Read the in-scope files** for full context:
 {% for artifact in artifacts %}
    - `{{ artifact.path }}` — {{ artifact.description | trim }}. **You modify this.**
 {% endfor %}
@@ -29,11 +43,12 @@ To set up a new experiment run, work with the user to:
 
 {% endif %}
 {% endfor %}
-4. **Initialize results log**: Create `{{ manifest.log.path }}` with the header row:
+5. **Initialize results log**: Create `{{ manifest.log.path }}` with the header row:
    ```
    {{ manifest.log.columns | join('\t' if manifest.log.format.value == 'tsv' else ',') }}
    ```
-5. **Confirm and go**: Confirm setup looks good with the user.
+6. **Add `{{ manifest.log.path }}` to `.gitignore`** if it isn't already.
+7. **Confirm and go**: Confirm setup looks good with the user.
 
 Once you get confirmation, kick off the experimentation loop.
 
@@ -141,7 +156,16 @@ LOOP FOREVER:
    - If `{{ primary.name }}` is equal or worse with no redeeming qualities → **discard** and revert. Status: `discard`.
 9. **Repeat**.
 
-**NEVER STOP**: Once the experiment loop has begun, do NOT pause to ask the human if you should continue. Do NOT ask "should I keep going?" or "is this a good stopping point?". The human might be asleep or away and expects you to continue working *indefinitely* until manually stopped. If you run out of ideas, think harder — re-read the artifacts and context for new angles, try combining previous near-misses, try more radical changes. The loop runs until the human interrupts you.
+**NEVER STOP.** Do not ask "should I continue?" Do not write a summary and stop. Do not conclude you've "exhausted the search space." The human may be asleep or away — they expect you to keep working *indefinitely* until manually interrupted.
+
+**When stuck**, don't stop — escalate your creativity:
+1. Re-read `{{ manifest.log.path }}` for patterns: which tags improved things? Which approaches are underexplored?
+2. Check parked experiments: `git tag -l 'parked/*'`. Revisit them — combine two parked ideas, or try one with a different twist.
+3. Vary scale: if you've been tweaking, try something radical. If you've been swinging big, try fine-tuning the current best.
+4. Re-read artifacts and context files — you'll notice things you missed now that you understand the problem better.
+5. Combine winners: if experiments 3 and 7 improved things independently, try both together.
+
+Plan one or two experiments ahead, not ten. After each result, reassess — the landscape changes with every keep.
 
 **Crashes**: If a run crashes with a fixable issue (typo, missing import), fix and re-run. If fundamentally broken, log as crash and move on. After {{ constraints.max_consecutive_failures }} consecutive failures on the same idea, step back and try a completely different approach.
 

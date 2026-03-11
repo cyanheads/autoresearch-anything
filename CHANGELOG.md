@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-03-11
+
+### Added
+
+- **Git protocol** in agent entry points and generated `program.md` — detailed branching, staging, commit format, parking, and revert conventions for experiment version control
+- **Creativity escalation** guidance in "never stop" section — concrete tactics for when agents feel stuck (re-read logs, revisit parked experiments, vary change scale, combine winners)
+
+### Changed
+
+- Setup flow in `program.md.jinja` now includes git status check and `.gitignore` step for the results log
+- "Never stop" section expanded from a single paragraph into structured guidance with numbered escalation steps
+- Agent entry points (`CLAUDE.md`, `AGENTS.md`) restructured: git protocol and autonomy guidance broken into dedicated sections instead of inline bullets
+
 ## [0.2.0] - 2026-03-11
 
 ### Added

@@ -45,9 +45,38 @@ uv run autoresearch validate <manifest>                # Check experiment.yaml f
 
 - **Read `program.md` before experimenting.** It has everything: what to modify, how to evaluate, decision rules, logging format.
 - **Never modify files listed as `immutable` in the manifest.**
-- **Never stop unless the human tells you to.** The experiment loop runs indefinitely.
 - **Log every experiment** to the results file, including crashes and discards.
-- **Use git** for version control — commit before each run, revert on discard.
+- **Use git properly** — see git protocol below.
+
+## Git protocol
+
+- **Branch per run**: Experiments happen on `experiment/<tag>` branches, never on `main`/`master`.
+- **Clean before starting**: Check `git status` before beginning. Commit any uncommitted changes first.
+- **Stage explicitly**: `git add <file>`, not `git add .` — avoid staging logs, data, or generated files.
+- **Commit before running**: Every experiment gets a commit *before* the evaluation run. This makes reverts clean.
+- **Commit format**: `exp <N>: <short description>` (e.g. `exp 3: switch to RMSNorm, increase depth to 8`).
+- **Don't commit the results log**: It stays untracked.
+- **Don't push** unless the user asks.
+- **Park with tags**: `git tag parked/<N>-<name>` preserves promising-but-not-improving commits before reverting.
+
+## Never stop
+
+Once the experiment loop begins, you run it **indefinitely** until the human manually interrupts you. Do not:
+- Ask "should I continue?" or "is this a good stopping point?"
+- Write a summary and stop after N experiments
+- Conclude that you've "exhausted the search space"
+- Pause to wait for feedback
+
+The human may be asleep, away, or simply trusts you to keep going. Your job is to keep experimenting.
+
+**When you feel stuck**, don't stop — escalate your creativity:
+1. **Re-read the results log.** Look for patterns: which tags/approaches yielded the best improvements? Which are underexplored?
+2. **Check parked experiments.** Run `git tag -l 'parked/*'` — these are ideas that showed promise but didn't beat the primary metric. Revisit them: combine two parked ideas, or try a parked idea with a different twist.
+3. **Vary the scale of changes.** If you've been making small tweaks, try something radical. If you've been making big swings, try fine-tuning the current best.
+4. **Re-read the artifacts and context files.** You may notice things you missed earlier now that you understand the problem better.
+5. **Combine winning ideas.** If experiments 3 and 7 both improved things independently, try applying both together.
+
+Plan one or two experiments ahead, not ten. After each result, reassess — the landscape changes with every keep.
 
 ## Project structure
 
