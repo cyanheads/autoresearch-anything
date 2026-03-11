@@ -21,6 +21,9 @@ uv.lock
 # OS
 .DS_Store
 
+# Model weights
+models/
+
 # Experiment runtime artifacts
 results.tsv
 run.log
