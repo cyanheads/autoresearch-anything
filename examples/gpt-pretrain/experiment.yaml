@@ -1,0 +1,79 @@
+# experiment.yaml — GPT pretraining optimization
+#
+# Mirrors the original autoresearch setup: an agent iterates on a
+# single-GPU GPT training script to minimize validation bits-per-byte
+# within a fixed 5-minute time budget.
+
+name: gpt-pretrain-optimization
+
+description: |
+  Optimize a single-GPU GPT pretraining script for lowest validation
+  bits-per-byte (val_bpb) within a fixed 5-minute wall-clock training budget.
+  Everything in train.py is fair game: architecture, optimizer, hyperparameters,
+  batch size, model size. The only constraint is that the code runs without
+  crashing and finishes within the time budget.
+
+artifacts:
+  - path: train.py
+    description: >
+      Model architecture, optimizer, training loop.
+      Everything is fair game: architecture, hyperparameters, optimizer,
+      batch size, model size, etc.
+
+immutable:
+  - path: prepare.py
+    reason: Fixed evaluation harness, data pipeline, and training constants
+  - path: pyproject.toml
+    reason: No new dependencies allowed
+
+evaluate:
+  command: "uv run train.py > run.log 2>&1"
+  timeout: 600
+
+  metrics:
+    - name: val_bpb
+      extract: "grep '^val_bpb:' run.log | awk '{print $2}'"
+      direction: minimize
+      primary: true
+
+    - name: peak_vram_mb
+      extract: "grep '^peak_vram_mb:' run.log | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 81920
+
+    - name: mfu_percent
+      extract: "grep '^mfu_percent:' run.log | awk '{print $2}'"
+      direction: maximize
+
+  crash_signals:
+    - Non-zero exit code
+    - FAIL printed to stdout (training divergence)
+    - Primary metric missing from output
+
+strategy:
+  type: hill-climb
+  keep_when: val_bpb improves (lower is better)
+  on_discard: revert
+  baseline: first_run
+
+constraints:
+  time_budget_per_run: 300
+  max_consecutive_failures: 3
+
+context:
+  - path: README.md
+    description: Repository context and design decisions
+  - path: prepare.py
+    description: Fixed constants, data prep, tokenizer, dataloader, evaluation
+
+log:
+  format: tsv
+  path: results.tsv
+  columns:
+    - commit
+    - val_bpb
+    - peak_vram_mb
+    - mfu_percent
+    - status
+    - description

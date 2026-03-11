@@ -1,0 +1,80 @@
+# experiment.yaml — Prompt optimization
+#
+# An agent iterates on a system prompt to maximize accuracy on a
+# benchmark task. The eval script sends each test case through an LLM
+# with the candidate prompt and scores the responses.
+
+name: prompt-optimization
+
+description: |
+  Optimize a system prompt for an LLM to maximize accuracy on a
+  classification benchmark. The agent modifies the prompt, runs the
+  eval harness, and keeps changes that improve accuracy.
+
+  The eval script in eval.py sends each test case from the benchmark
+  through an LLM using the candidate prompt in prompt.txt, scores the
+  responses, and reports accuracy.
+
+artifacts:
+  - path: prompt.txt
+    description: >
+      The system prompt sent to the LLM. Free-form text — the agent
+      can rewrite, restructure, add examples, change tone, etc.
+
+immutable:
+  - path: eval.py
+    reason: Fixed evaluation harness — defines the benchmark and scoring
+  - path: test_cases.jsonl
+    reason: The benchmark dataset
+
+evaluate:
+  command: "python eval.py > run.log 2>&1"
+  timeout: 300
+
+  metrics:
+    - name: accuracy
+      extract: "grep '^accuracy:' run.log | awk '{print $2}'"
+      direction: maximize
+      primary: true
+
+    - name: avg_latency_ms
+      extract: "grep '^avg_latency_ms:' run.log | awk '{print $2}'"
+      direction: minimize
+
+    - name: token_count
+      extract: "grep '^prompt_tokens:' run.log | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 4096
+
+  crash_signals:
+    - Non-zero exit code
+    - Primary metric missing from output
+    - API rate limit exceeded
+
+strategy:
+  type: hill-climb
+  keep_when: accuracy improves (higher is better)
+  on_discard: revert
+  baseline: first_run
+
+constraints:
+  time_budget_per_run: 120
+  max_consecutive_failures: 3
+
+context:
+  - path: eval.py
+    description: Eval harness — shows how the prompt is used and scored
+  - path: test_cases.jsonl
+    description: Sample test cases for understanding the task
+
+log:
+  format: tsv
+  path: results.tsv
+  columns:
+    - commit
+    - accuracy
+    - avg_latency_ms
+    - prompt_tokens
+    - status
+    - description

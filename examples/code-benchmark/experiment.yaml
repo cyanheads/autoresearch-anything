@@ -1,0 +1,111 @@
+# experiment.yaml — Code performance optimization
+#
+# An agent iterates on an algorithm implementation to maximize
+# throughput on a fixed benchmark suite. Multi-agent variant with
+# an explorer for bold changes and a refiner for tuning.
+
+name: code-benchmark
+
+description: |
+  Optimize a Python algorithm implementation for maximum throughput
+  on a fixed benchmark suite. The benchmark runs the solver against
+  standardized inputs and measures operations per second.
+
+  The agent modifies solver.py — algorithm choice, data structures,
+  inner loop optimizations, caching strategies, etc. The benchmark
+  harness and test inputs are fixed.
+
+artifacts:
+  - path: solver.py
+    description: >
+      The algorithm implementation. Everything is fair game: algorithm
+      choice, data structures, caching, loop unrolling, etc. Must
+      produce correct output for all benchmark inputs.
+
+immutable:
+  - path: benchmark.py
+    reason: Fixed benchmark harness and correctness checker
+  - path: inputs/
+    reason: Benchmark input files
+
+evaluate:
+  command: "python benchmark.py > run.log 2>&1"
+  timeout: 120
+
+  metrics:
+    - name: ops_per_sec
+      extract: "grep '^ops_per_sec:' run.log | awk '{print $2}'"
+      direction: maximize
+      primary: true
+
+    - name: correctness
+      extract: "grep '^correctness:' run.log | awk '{print $2}'"
+      direction: maximize
+      constraint:
+        min: 1.0
+
+    - name: peak_memory_mb
+      extract: "grep '^peak_memory_mb:' run.log | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 1024
+
+  crash_signals:
+    - Non-zero exit code
+    - Correctness below 1.0 (any wrong answer is a failure)
+    - Primary metric missing from output
+
+strategy:
+  type: hill-climb
+  keep_when: ops_per_sec improves while correctness stays at 1.0
+  on_discard: revert
+  baseline: first_run
+
+constraints:
+  time_budget_per_run: 60
+  max_consecutive_failures: 5
+
+context:
+  - path: benchmark.py
+    description: Benchmark harness — shows inputs, timing, correctness checks
+  - path: solver.py
+    description: Current implementation to understand before modifying
+
+log:
+  format: tsv
+  path: results.tsv
+  columns:
+    - commit
+    - ops_per_sec
+    - correctness
+    - peak_memory_mb
+    - status
+    - description
+
+# Multi-agent: two agents with different strategies
+agents:
+  - name: explorer
+    role: |
+      You are the explorer. Try bold, unconventional approaches.
+      Completely different algorithms, novel data structures,
+      counterintuitive optimizations. You're looking for step-function
+      improvements, not incremental gains. It's fine if many of your
+      experiments fail — one breakthrough is worth ten crashes.
+    strategy:
+      type: explore
+      keep_when: ops_per_sec improves by at least 5%
+      on_discard: revert
+      baseline: first_run
+
+  - name: refiner
+    role: |
+      You are the refiner. Take the current best implementation and
+      make it faster through careful tuning. Profile bottlenecks,
+      optimize hot loops, reduce allocations, improve cache locality.
+      Every percent counts. Avoid risky rewrites — prefer targeted,
+      safe improvements.
+    strategy:
+      type: hill-climb
+      keep_when: any ops_per_sec improvement
+      on_discard: revert
+      baseline: first_run
