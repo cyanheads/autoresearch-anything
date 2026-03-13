@@ -48,6 +48,8 @@ immutable:
     reason: Reference material (paper PDF + ideas doc)
 
 evaluate:
+  # head-type is controlled by modifying the default in train.py or passing args
+  # The experiment loop changes --head-type as needed
   command: "cd experiments/lm-heads && CUDA_VISIBLE_DEVICES=1 uv run python train.py > run.log 2>&1"
   timeout: 1200
 

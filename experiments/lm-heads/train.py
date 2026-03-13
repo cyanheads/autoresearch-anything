@@ -58,13 +58,19 @@ class TransformerBackbone(nn.Module):
         nn.init.normal_(self.tok_emb.weight, std=0.02)
         nn.init.normal_(self.pos_emb.weight, std=0.02)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, return_intermediates: list[int] | None = None) -> torch.Tensor | tuple[torch.Tensor, dict[int, torch.Tensor]]:
         B, T = x.shape
         positions = torch.arange(T, device=x.device).unsqueeze(0)
         h = self.tok_emb(x) + self.pos_emb(positions)
-        for layer in self.layers:
+        intermediates = {}
+        for i, layer in enumerate(self.layers):
             h = layer(h)
-        return self.norm(h)
+            if return_intermediates is not None and i in return_intermediates:
+                intermediates[i] = h
+        h = self.norm(h)
+        if return_intermediates is not None:
+            return h, intermediates
+        return h
 
 
 class TransformerBlock(nn.Module):
@@ -118,9 +124,14 @@ class SpamLangModel(nn.Module):
         super().__init__()
         self.backbone = backbone
         self.head = head
+        # multi_exit needs intermediate layer outputs
+        self._return_intermediates = getattr(head, 'exit_layers', None)
 
     def forward(self, x: torch.Tensor):
         """Returns (loss, logits) given input token ids."""
+        if self._return_intermediates is not None:
+            h, intermediates = self.backbone(x, return_intermediates=self._return_intermediates)
+            return self.head(h, x, intermediates=intermediates)
         h = self.backbone(x)
         return self.head(h, x)
 
@@ -145,7 +156,7 @@ def train(args):
     # Build backbone
     backbone = TransformerBackbone(vocab_size, d_model, n_heads, n_layers, d_ff)
 
-    # Build head
+    # Build head (pass backbone for weight tying)
     head = build_head(
         head_type=args.head_type,
         vocab_size=vocab_size,
@@ -155,7 +166,6 @@ def train(args):
     )
 
     model = SpamLangModel(backbone, head).to(device)
-    model = torch.compile(model)
 
     n_params = sum(p.numel() for p in model.parameters())
     n_params_nonemb = n_params - backbone.tok_emb.weight.numel() - backbone.pos_emb.weight.numel()
@@ -186,12 +196,20 @@ def train(args):
     start_time = time.time()
     best_val_loss = float("inf")
     log_interval = max(1, total_steps // 20)
+    recent_losses: list[float] = []  # EMA window for smoothed train_loss
 
     for step in range(1, total_steps + 1):
         model.train()
         batch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
 
-        loss, _ = model(batch)
+        with torch.autocast('cuda', dtype=torch.bfloat16):
+            loss, _ = model(batch)
+
+        # NaN guard
+        if torch.isnan(loss):
+            print("NaN detected in loss at step", step, file=sys.stderr)
+            print("NaN detected")
+            sys.exit(1)
 
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
@@ -199,13 +217,17 @@ def train(args):
         optimizer.step()
         scheduler.step()
 
+        recent_losses.append(loss.item())
+        if len(recent_losses) > 100:
+            recent_losses.pop(0)
+
         if step % log_interval == 0 or step == 1:
             # Validation
             model.eval()
             val_losses = []
             val_correct = 0
             val_total = 0
-            with torch.no_grad():
+            with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
                 for _ in range(10):
                     vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
                     vloss, vlogits = model(vbatch)
@@ -218,11 +240,12 @@ def train(args):
 
             avg_val_loss = sum(val_losses) / len(val_losses)
             val_acc = val_correct / val_total
+            smooth_train = sum(recent_losses) / len(recent_losses)
             elapsed = time.time() - start_time
 
             print(
                 f"step {step}/{total_steps}  "
-                f"train_loss={loss.item():.4f}  "
+                f"train_loss={smooth_train:.4f}  "
                 f"val_loss={avg_val_loss:.4f}  "
                 f"val_acc={val_acc:.4f}  "
                 f"lr={scheduler.get_last_lr()[0]:.2e}  "
@@ -238,7 +261,7 @@ def train(args):
     val_losses = []
     val_correct = 0
     val_total = 0
-    with torch.no_grad():
+    with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
         for _ in range(50):
             vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
             vloss, vlogits = model(vbatch)
@@ -250,6 +273,7 @@ def train(args):
 
     final_val_loss = sum(val_losses) / len(val_losses)
     final_val_acc = val_correct / val_total
+    smooth_train = sum(recent_losses) / len(recent_losses)
     wall_time = time.time() - start_time
 
     peak_vram = torch.cuda.max_memory_allocated(device) / 1e6 if torch.cuda.is_available() else 0
@@ -257,7 +281,7 @@ def train(args):
     # Report metrics (stdout — captured by autoresearch)
     print(f"val_loss: {final_val_loss:.6f}")
     print(f"val_accuracy: {final_val_acc:.6f}")
-    print(f"train_loss: {loss.item():.6f}")
+    print(f"train_loss: {smooth_train:.6f}")
     print(f"wall_time_s: {wall_time:.1f}")
     print(f"peak_vram_mb: {peak_vram:.0f}")
     print(f"head_type: {args.head_type}")
