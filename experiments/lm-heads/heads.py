@@ -322,3 +322,131 @@ class FactoredHead(nn.Module):
             full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
 
         return loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 6. Three-level factored: cube-root decomposition
+# ---------------------------------------------------------------------------
+
+@register_head("factored3")
+class Factored3Head(nn.Module):
+    """Three-level independent factorization: token = f1*f2_size*f3_size + f2*f3_size + f3.
+
+    Cube root of 32768 ~ 32. Each stage predicts over ~32 classes where
+    D=576 >> 32. The gradient per stage is essentially uncompressed.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.f_size = math.ceil(vocab_size ** (1/3))
+        while self.f_size ** 3 < vocab_size:
+            self.f_size += 1
+
+        self.proj_f1 = nn.Linear(d_model, self.f_size, bias=False)
+        self.proj_f2 = nn.Linear(d_model, self.f_size, bias=False)
+        self.proj_f3 = nn.Linear(d_model, self.f_size, bias=False)
+
+        for proj in [self.proj_f1, self.proj_f2, self.proj_f3]:
+            nn.init.normal_(proj.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        targets = x[:, 1:].reshape(-1)
+        f_size_sq = self.f_size * self.f_size
+        f1_targets = targets // f_size_sq
+        f2_targets = (targets % f_size_sq) // self.f_size
+        f3_targets = targets % self.f_size
+
+        h_shift = h[:, :-1].reshape(-1, D)
+
+        f1_logits = self.proj_f1(h_shift)
+        f2_logits = self.proj_f2(h_shift)
+        f3_logits = self.proj_f3(h_shift)
+
+        f1_loss = F.cross_entropy(f1_logits, f1_targets)
+        f2_loss = F.cross_entropy(f2_logits, f2_targets)
+        f3_loss = F.cross_entropy(f3_logits, f3_targets)
+
+        loss = f1_loss + f2_loss + f3_loss
+
+        with torch.no_grad():
+            f1_pred = f1_logits.argmax(dim=-1)
+            f2_pred = f2_logits.argmax(dim=-1)
+            f3_pred = f3_logits.argmax(dim=-1)
+            predicted = (f1_pred * f_size_sq + f2_pred * self.f_size + f3_pred).clamp(max=self.vocab_size - 1)
+            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 7. Factored + multi-exit hybrid
+# ---------------------------------------------------------------------------
+
+@register_head("factored_multi_exit")
+class FactoredMultiExitHead(nn.Module):
+    """Combine factored output (reduces V per stage) + multi-exit (direct
+    gradient paths to earlier layers). Each exit uses factored prediction."""
+
+    def __init__(self, vocab_size: int, d_model: int, n_layers: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.f_size = math.isqrt(vocab_size)
+        if self.f_size * self.f_size < vocab_size:
+            self.f_size += 1
+
+        self.exit_layers = [n_layers // 3 - 1, 2 * n_layers // 3 - 1, n_layers - 1]
+
+        self.exit_norms = nn.ModuleList([nn.RMSNorm(d_model) for _ in self.exit_layers])
+        self.exit_f1 = nn.ModuleList([nn.Linear(d_model, self.f_size, bias=False) for _ in self.exit_layers])
+        self.exit_f2 = nn.ModuleList([nn.Linear(d_model, self.f_size, bias=False) for _ in self.exit_layers])
+        self.exit_weights = nn.Parameter(torch.ones(len(self.exit_layers)))
+
+        for proj_list in [self.exit_f1, self.exit_f2]:
+            for proj in proj_list:
+                nn.init.normal_(proj.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, intermediates: dict[int, torch.Tensor] | None = None, **kwargs):
+        if intermediates is None:
+            intermediates = {}
+
+        B, T, D = h.shape
+        targets = x[:, 1:].reshape(-1)
+        f1_targets = targets // self.f_size
+        f2_targets = targets % self.f_size
+
+        weights = F.softmax(self.exit_weights, dim=0)
+        total_loss = torch.tensor(0.0, device=h.device)
+        final_f1_logits = None
+        final_f2_logits = None
+
+        for i, idx in enumerate(self.exit_layers):
+            state = intermediates.get(idx, h)
+            state = self.exit_norms[i](state)
+            h_shift = state[:, :-1].reshape(-1, D)
+
+            f1_logits = self.exit_f1[i](h_shift)
+            f2_logits = self.exit_f2[i](h_shift)
+
+            f1_loss = F.cross_entropy(f1_logits, f1_targets)
+            f2_loss = F.cross_entropy(f2_logits, f2_targets)
+
+            total_loss = total_loss + weights[i] * (f1_loss + f2_loss)
+            final_f1_logits = f1_logits
+            final_f2_logits = f2_logits
+
+        with torch.no_grad():
+            f1_pred = final_f1_logits.argmax(dim=-1)
+            f2_pred = final_f2_logits.argmax(dim=-1)
+            predicted = (f1_pred * self.f_size + f2_pred).clamp(max=self.vocab_size - 1)
+            full_logits = torch.full((final_f1_logits.shape[0], self.vocab_size), -100.0, device=h.device)
+            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return total_loss, full_logits
