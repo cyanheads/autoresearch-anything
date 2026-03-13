@@ -672,7 +672,69 @@ class _LearnedBackwardFn(torch.autograd.Function):
 
 
 # ---------------------------------------------------------------------------
-# 11. Semantic factored: factored prediction with embedding-based clustering
+# 11. Baseline + factored auxiliary: full V-dim prediction with un-bottlenecked aux gradient
+# ---------------------------------------------------------------------------
+
+@register_head("baseline_factored_aux")
+class BaselineFactoredAuxHead(nn.Module):
+    """Baseline head for prediction + factored auxiliary for gradient quality.
+
+    The baseline head does the real V-dim prediction (for inference/accuracy).
+    The factored auxiliary computes loss through ~√V-class projections, providing
+    un-bottlenecked gradient to the backbone as a supplement.
+
+    Key difference from contrastive_aux: the aux here decomposes the SAME
+    classification task, not a different objective. Key difference from
+    factored_emb_aux: the primary head is the bottlenecked baseline, so the
+    aux gradient actually addresses a real deficit.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+
+        # Primary: standard baseline head
+        self.proj = nn.Linear(d_model, vocab_size, bias=False)
+        nn.init.normal_(self.proj.weight, std=0.02)
+
+        # Auxiliary: factored head for gradient quality
+        self.f_size = math.isqrt(vocab_size)
+        if self.f_size * self.f_size < vocab_size:
+            self.f_size += 1
+
+        self.proj_f1 = nn.Linear(d_model, self.f_size, bias=False)
+        self.proj_f2 = nn.Linear(d_model, self.f_size, bias=False)
+        nn.init.normal_(self.proj_f1.weight, std=0.02)
+        nn.init.normal_(self.proj_f2.weight, std=0.02)
+
+        self.aux_weight = 0.5  # balance between primary and aux loss
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+        targets = x[:, 1:].reshape(-1)
+
+        # Primary loss: standard CE over full V
+        logits = self.proj(h)
+        ce_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            targets,
+        )
+
+        # Auxiliary loss: factored CE over √V classes each
+        h_shift = h[:, :-1].reshape(-1, D)
+        f1_targets = targets // self.f_size
+        f2_targets = targets % self.f_size
+
+        f1_loss = F.cross_entropy(self.proj_f1(h_shift), f1_targets)
+        f2_loss = F.cross_entropy(self.proj_f2(h_shift), f2_targets)
+
+        loss = ce_loss + self.aux_weight * (f1_loss + f2_loss)
+
+        return loss, logits  # return baseline logits for accuracy
+
+
+# ---------------------------------------------------------------------------
+# 12. Semantic factored: factored prediction with embedding-based clustering
 # ---------------------------------------------------------------------------
 
 @register_head("semantic_factored")
