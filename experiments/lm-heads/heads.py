@@ -669,3 +669,144 @@ class _LearnedBackwardFn(torch.autograd.Function):
         grad_B = (B - W.T) * 0.01
 
         return grad_h, grad_W, grad_B
+
+
+# ---------------------------------------------------------------------------
+# 11. Semantic factored: factored prediction with embedding-based clustering
+# ---------------------------------------------------------------------------
+
+@register_head("semantic_factored")
+class SemanticFactoredHead(nn.Module):
+    """Factored prediction using semantic clusters from pretrained embeddings.
+
+    Instead of arbitrary arithmetic decomposition (token_id // K, token_id % K),
+    tokens are grouped by embedding similarity. Each cluster contains semantically
+    related tokens, so "cluster prediction" ≈ "what kind of word?" and
+    "within-cluster prediction" ≈ "which specific word?"
+
+    Requires semantic_clusters.pt (generated from GPT-2 embeddings via PCA + chunking).
+    Falls back to arbitrary factoring if the file doesn't exist.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+
+        # Load semantic cluster mapping
+        import os
+        cluster_path = os.path.join(os.path.dirname(__file__), "semantic_clusters.pt")
+        data = torch.load(cluster_path, weights_only=True)
+        self.n_clusters = data["n_clusters"]
+        self.cluster_size = data["cluster_size"]
+
+        # Buffers: not parameters, but move with .to(device)
+        self.register_buffer("token_to_cluster", data["token_to_cluster"])     # (V,)
+        self.register_buffer("token_to_position", data["token_to_position"])   # (V,)
+        self.register_buffer("cluster_to_token", data["cluster_to_token"])     # (n_clusters, cluster_size)
+
+        # Projections: same architecture as FactoredHead
+        self.proj_cluster = nn.Linear(d_model, self.n_clusters, bias=False)
+        self.proj_position = nn.Linear(d_model, self.cluster_size, bias=False)
+
+        nn.init.normal_(self.proj_cluster.weight, std=0.02)
+        nn.init.normal_(self.proj_position.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        targets = x[:, 1:].reshape(-1)
+        cluster_targets = self.token_to_cluster[targets]    # semantic cluster ID
+        position_targets = self.token_to_position[targets]  # position within cluster
+
+        h_shift = h[:, :-1].reshape(-1, D)
+
+        cluster_logits = self.proj_cluster(h_shift)
+        position_logits = self.proj_position(h_shift)
+
+        cluster_loss = F.cross_entropy(cluster_logits, cluster_targets)
+        position_loss = F.cross_entropy(position_logits, position_targets)
+
+        loss = cluster_loss + position_loss
+
+        # Reconstruct token prediction for accuracy
+        with torch.no_grad():
+            c_pred = cluster_logits.argmax(dim=-1)       # predicted cluster
+            p_pred = position_logits.argmax(dim=-1)      # predicted position
+            # Look up actual token ID from (cluster, position)
+            predicted = self.cluster_to_token[c_pred, p_pred]
+            predicted = predicted.clamp(max=self.vocab_size - 1)
+            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 12. Semantic hierarchical: semantic clusters + cluster-conditioned prediction
+# ---------------------------------------------------------------------------
+
+@register_head("semantic_hierarchical")
+class SemanticHierarchicalHead(nn.Module):
+    """Hierarchical prediction with semantic clusters and cluster bias conditioning.
+
+    Same as SemanticFactoredHead but adds per-cluster bias to the position prediction,
+    so the within-cluster prediction is conditioned on which cluster was selected.
+    On real language (unlike SpamLang), this conditioning should matter because
+    cluster identity carries semantic information.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+
+        import os
+        cluster_path = os.path.join(os.path.dirname(__file__), "semantic_clusters.pt")
+        data = torch.load(cluster_path, weights_only=True)
+        self.n_clusters = data["n_clusters"]
+        self.cluster_size = data["cluster_size"]
+
+        self.register_buffer("token_to_cluster", data["token_to_cluster"])
+        self.register_buffer("token_to_position", data["token_to_position"])
+        self.register_buffer("cluster_to_token", data["cluster_to_token"])
+
+        self.proj_cluster = nn.Linear(d_model, self.n_clusters, bias=False)
+        self.proj_position = nn.Linear(d_model, self.cluster_size, bias=False)
+        self.cluster_bias = nn.Parameter(torch.zeros(self.n_clusters, self.cluster_size))
+
+        nn.init.normal_(self.proj_cluster.weight, std=0.02)
+        nn.init.normal_(self.proj_position.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        targets = x[:, 1:].reshape(-1)
+        cluster_targets = self.token_to_cluster[targets]
+        position_targets = self.token_to_position[targets]
+
+        h_shift = h[:, :-1].reshape(-1, D)
+
+        # Stage 1: cluster prediction
+        cluster_logits = self.proj_cluster(h_shift)
+        cluster_loss = F.cross_entropy(cluster_logits, cluster_targets)
+
+        # Stage 2: position prediction conditioned on true cluster (teacher forcing)
+        position_logits_base = self.proj_position(h_shift)
+        bias = self.cluster_bias[cluster_targets]
+        position_logits = position_logits_base + bias
+        position_loss = F.cross_entropy(position_logits, position_targets)
+
+        loss = cluster_loss + position_loss
+
+        with torch.no_grad():
+            c_pred = cluster_logits.argmax(dim=-1)
+            p_logits = position_logits_base + self.cluster_bias[c_pred]
+            p_pred = p_logits.argmax(dim=-1)
+            predicted = self.cluster_to_token[c_pred, p_pred].clamp(max=self.vocab_size - 1)
+            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return loss, full_logits
