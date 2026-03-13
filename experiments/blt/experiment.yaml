@@ -1,0 +1,112 @@
+# experiment.yaml — Byte Latent Transformer architecture search
+#
+# Train small BLT models from scratch, sweeping the unexplored design space:
+# encoder/decoder depth ratio, patching strategy, n-gram config, global/local
+# dimension ratio. All at ~50-100M params on a single RTX 3090.
+
+name: blt-architecture-search
+
+description: |
+  Optimize a Byte Latent Transformer (BLT) training script for lowest
+  validation bits-per-byte (val_bpb) within a fixed wall-clock training
+  budget on a single GPU.
+
+  BLT is a tokenizer-free architecture with three components:
+    1. Local Encoder — lightweight byte-level transformer, pools bytes into patches
+    2. Global Transformer — the main model, operates on patches (not bytes)
+    3. Local Decoder — unpacks patches back to byte predictions
+
+  The key innovation is entropy-based dynamic patching: a small helper model
+  measures per-byte surprise, grouping predictable bytes into large patches
+  (cheap) and giving surprising bytes small patches (full compute).
+
+  The agent explores architecture configurations: encoder/decoder depth,
+  dimension ratios, patching strategy, n-gram embeddings, and training
+  hyperparameters. Target model size: ~50-100M parameters total.
+
+  The evaluation dataset is a fixed subset of FineWeb-Edu, preprocessed
+  to raw bytes with train/val splits.
+
+artifacts:
+  - path: train.py
+    description: >
+      BLT model definition, training loop, and evaluation.
+      Everything is fair game: encoder/decoder depth and width,
+      global transformer config, patching strategy (fixed vs entropy-based),
+      n-gram embedding config, optimizer, learning rate schedule,
+      batch size, sequence length. Must output metrics to stdout.
+
+immutable:
+  - path: data.py
+    reason: Fixed data loading pipeline — downloads and caches FineWeb-Edu subset, provides byte-level train/val iterators
+  - path: experiment.yaml
+    reason: Experiment manifest
+
+evaluate:
+  command: "uv run python train.py > run.log 2>&1"
+  timeout: 600
+
+  metrics:
+    - name: val_bpb
+      extract: "grep '^val_bpb:' run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      primary: true
+
+    - name: train_bpb
+      extract: "grep '^train_bpb:' run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+
+    - name: throughput_bytes_per_sec
+      extract: "grep '^throughput_bytes_per_sec:' run.log | tail -1 | awk '{print $2}'"
+      direction: maximize
+
+    - name: peak_vram_mb
+      extract: "grep '^peak_vram_mb:' run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 22000
+
+    - name: total_params_m
+      extract: "grep '^total_params_m:' run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+
+  crash_signals:
+    - Non-zero exit code
+    - CUDA out of memory
+    - Primary metric missing from output
+    - NaN or Inf in loss
+
+strategy:
+  type: explore
+  keep_when: >
+    val_bpb improves, OR val_bpb is within 2% of best but throughput_bytes_per_sec
+    improves by >20%, OR a novel architecture variant (e.g. SSM encoder, forget-gated
+    attention) shows promising val_bpb trajectory even if not yet beating baseline
+  on_discard: revert
+  baseline: first_run
+
+constraints:
+  time_budget_per_run: 480
+  max_consecutive_failures: 5
+
+context:
+  - path: data.py
+    description: Data pipeline — byte-level iterators, dataset size, vocab (256 bytes)
+  - path: README.md
+    description: BLT architecture reference and experiment design notes
+
+log:
+  format: tsv
+  path: results.tsv
+  columns:
+    - experiment
+    - parent
+    - commit
+    - val_bpb
+    - train_bpb
+    - throughput_bytes_per_sec
+    - peak_vram_mb
+    - total_params_m
+    - status
+    - description
+    - tags
