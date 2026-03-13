@@ -1,12 +1,13 @@
 """
 experiments/lm-heads/train.py
 
-SpamLang training script for LM head experiments.
-Trains a small transformer on the SpamLang synthetic language (repeat one token)
-and reports metrics for the autoresearch experiment loop.
+Training script for LM head gradient bottleneck experiments.
+Supports two data modes:
+  - spamlang: synthetic language (one token repeated) — isolates gradient bottleneck
+  - fineweb: real English text from FineWeb-Edu — tests transfer to real language
 
 Usage:
-    python train.py [--head-type baseline] [--vocab-size 32768] [--steps 5000]
+    python train.py [--head-type baseline] [--dataset spamlang|fineweb] [--steps 5000]
 """
 
 import argparse
@@ -22,7 +23,7 @@ from heads import build_head
 
 
 # ---------------------------------------------------------------------------
-# SpamLang data generation
+# Data: SpamLang (synthetic) and FineWeb-Edu (real language)
 # ---------------------------------------------------------------------------
 
 def make_spamlang_batch(
@@ -34,6 +35,50 @@ def make_spamlang_batch(
     """Each sequence is one token repeated seq_len times."""
     tokens = torch.randint(0, vocab_size, (batch_size, 1), device=device)
     return tokens.expand(batch_size, seq_len).contiguous()
+
+
+class FineWebDataset:
+    """Streams and tokenizes FineWeb-Edu text into a token buffer.
+
+    Pre-fills a fixed-size token buffer at init, then serves random windows.
+    Separate buffers for train/val (different slices of the stream).
+    """
+
+    def __init__(self, seq_len: int, device: torch.device, train_tokens: int = 10_000_000, val_tokens: int = 500_000):
+        import tiktoken
+        from datasets import load_dataset
+
+        self.seq_len = seq_len
+        self.device = device
+        self.enc = tiktoken.get_encoding("gpt2")
+        self.vocab_size = self.enc.n_vocab  # 50257
+
+        print(f"Loading FineWeb-Edu (streaming)...", file=sys.stderr)
+        ds = load_dataset("HuggingFaceFW/FineWeb-Edu", name="sample-10BT", split="train", streaming=True)
+
+        # Tokenize into a flat buffer
+        total_needed = train_tokens + val_tokens
+        tokens = []
+        n_tokens = 0
+        for example in ds:
+            encoded = self.enc.encode_ordinary(example["text"])
+            tokens.extend(encoded)
+            n_tokens += len(encoded)
+            if n_tokens >= total_needed:
+                break
+            if n_tokens % 1_000_000 < len(encoded):
+                print(f"  tokenized {n_tokens:,} / {total_needed:,} tokens", file=sys.stderr)
+
+        all_tokens = torch.tensor(tokens[:total_needed], dtype=torch.long)
+        self.train_buf = all_tokens[:train_tokens].to(device)
+        self.val_buf = all_tokens[train_tokens:train_tokens + val_tokens].to(device)
+        print(f"  train buffer: {self.train_buf.shape[0]:,} tokens, val buffer: {self.val_buf.shape[0]:,} tokens", file=sys.stderr)
+
+    def get_batch(self, batch_size: int, split: str = "train") -> torch.Tensor:
+        buf = self.train_buf if split == "train" else self.val_buf
+        max_start = buf.shape[0] - self.seq_len
+        starts = torch.randint(0, max_start, (batch_size,), device=self.device)
+        return torch.stack([buf[s:s + self.seq_len] for s in starts])
 
 
 # ---------------------------------------------------------------------------
@@ -144,14 +189,23 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"device: {device}", file=sys.stderr)
 
-    # Model config — matches paper's SpamLang setup (106M non-embedding params)
+    # Model config
     d_model = args.d_model
     n_heads = args.n_heads
     n_layers = args.n_layers
     d_ff = args.d_ff
-    vocab_size = args.vocab_size
     seq_len = args.seq_len
     batch_size = args.batch_size
+
+    # Dataset setup
+    fineweb_ds = None
+    if args.dataset == "fineweb":
+        fineweb_ds = FineWebDataset(seq_len, device, train_tokens=args.train_tokens, val_tokens=args.val_tokens)
+        vocab_size = fineweb_ds.vocab_size  # 50257 (GPT-2)
+        print(f"dataset: fineweb (V={vocab_size})", file=sys.stderr)
+    else:
+        vocab_size = args.vocab_size
+        print(f"dataset: spamlang (V={vocab_size})", file=sys.stderr)
 
     # Build backbone
     backbone = TransformerBackbone(vocab_size, d_model, n_heads, n_layers, d_ff)
@@ -200,7 +254,10 @@ def train(args):
 
     for step in range(1, total_steps + 1):
         model.train()
-        batch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
+        if fineweb_ds is not None:
+            batch = fineweb_ds.get_batch(batch_size, split="train")
+        else:
+            batch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
 
         with torch.autocast('cuda', dtype=torch.bfloat16):
             loss, _ = model(batch)
@@ -229,11 +286,13 @@ def train(args):
             val_total = 0
             with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
                 for _ in range(10):
-                    vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
+                    if fineweb_ds is not None:
+                        vbatch = fineweb_ds.get_batch(batch_size, split="val")
+                    else:
+                        vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
                     vloss, vlogits = model(vbatch)
                     val_losses.append(vloss.item())
-                    # Accuracy: does the model predict the repeated token at positions 1+?
-                    preds = vlogits[:, :-1].argmax(dim=-1)  # predictions for positions 1..T-1
+                    preds = vlogits[:, :-1].argmax(dim=-1)
                     targets = vbatch[:, 1:]
                     val_correct += (preds == targets).sum().item()
                     val_total += targets.numel()
@@ -263,7 +322,10 @@ def train(args):
     val_total = 0
     with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
         for _ in range(50):
-            vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
+            if fineweb_ds is not None:
+                vbatch = fineweb_ds.get_batch(batch_size, split="val")
+            else:
+                vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
             vloss, vlogits = model(vbatch)
             val_losses.append(vloss.item())
             preds = vlogits[:, :-1].argmax(dim=-1)
@@ -285,23 +347,28 @@ def train(args):
     print(f"wall_time_s: {wall_time:.1f}")
     print(f"peak_vram_mb: {peak_vram:.0f}")
     print(f"head_type: {args.head_type}")
+    print(f"dataset: {args.dataset}")
     print(f"vocab_size: {vocab_size}")
     print(f"d_model: {d_model}")
+    print(f"seq_len: {seq_len}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SpamLang LM Head Experiment")
+    parser = argparse.ArgumentParser(description="LM Head Gradient Bottleneck Experiment")
     parser.add_argument("--head-type", type=str, default="baseline")
-    parser.add_argument("--vocab-size", type=int, default=32768)
+    parser.add_argument("--dataset", type=str, default="spamlang", choices=["spamlang", "fineweb"])
+    parser.add_argument("--vocab-size", type=int, default=32768, help="Only used for spamlang; fineweb uses GPT-2 vocab (50257)")
     parser.add_argument("--d-model", type=int, default=576)
     parser.add_argument("--n-heads", type=int, default=9)
     parser.add_argument("--n-layers", type=int, default=30)
     parser.add_argument("--d-ff", type=int, default=1536)
-    parser.add_argument("--seq-len", type=int, default=64)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--seq-len", type=int, default=64, help="64 for spamlang, recommend 256 for fineweb")
+    parser.add_argument("--batch-size", type=int, default=128, help="128 for spamlang, recommend 32 for fineweb")
     parser.add_argument("--steps", type=int, default=5000)
     parser.add_argument("--warmup-steps", type=int, default=500)
     parser.add_argument("--lr", type=float, default=5e-4)
+    parser.add_argument("--train-tokens", type=int, default=10_000_000, help="Token buffer size for fineweb training")
+    parser.add_argument("--val-tokens", type=int, default=500_000, help="Token buffer size for fineweb validation")
     args = parser.parse_args()
     train(args)
 
