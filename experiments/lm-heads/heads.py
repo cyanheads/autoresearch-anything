@@ -131,10 +131,10 @@ class HierarchicalHead(nn.Module):
             bias = self.cluster_bias[top_cluster]
             top_token = (token_logits_base + bias).argmax(dim=-1)
             predicted = (top_cluster * self.cluster_size + top_token).clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -316,10 +316,10 @@ class FactoredHead(nn.Module):
             f1_pred = f1_logits.argmax(dim=-1)
             f2_pred = f2_logits.argmax(dim=-1)
             predicted = (f1_pred * self.f2_size + f2_pred).clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -376,10 +376,10 @@ class Factored3Head(nn.Module):
             f2_pred = f2_logits.argmax(dim=-1)
             f3_pred = f3_logits.argmax(dim=-1)
             predicted = (f1_pred * f_size_sq + f2_pred * self.f_size + f3_pred).clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -444,10 +444,10 @@ class FactoredMultiExitHead(nn.Module):
             f1_pred = final_f1_logits.argmax(dim=-1)
             f2_pred = final_f2_logits.argmax(dim=-1)
             predicted = (f1_pred * self.f_size + f2_pred).clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((final_f1_logits.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((final_f1_logits.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return total_loss, full_logits
 
@@ -512,8 +512,8 @@ class EmbeddingPredHead(nn.Module):
         with torch.no_grad():
             # Dot product with full embedding table for token prediction
             sim = pred_emb @ self.embedding_weight.T  # (N, V)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, sim.reshape(B, T - 1, self.vocab_size)], dim=1)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = sim.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -580,10 +580,10 @@ class FactoredResidualHead(nn.Module):
             h_cond_pred = h_shift + f1_cond_pred
             f2_pred = self.proj_f2(h_cond_pred).argmax(dim=-1)
             predicted = (f1_pred * self.f_size + f2_pred).clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -634,8 +634,8 @@ class LearnedBackwardHead(nn.Module):
         loss = F.cross_entropy(logits, targets)
 
         # Reshape logits for accuracy
-        pad = torch.zeros(B_size, 1, self.vocab_size, device=h.device)
-        full_logits = torch.cat([pad, logits.reshape(B_size, T - 1, self.vocab_size)], dim=1)
+        full_logits = torch.zeros(B_size, T, self.vocab_size, device=h.device)
+        full_logits[:, :-1] = logits.reshape(B_size, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -797,10 +797,10 @@ class SemanticFactoredHead(nn.Module):
             # Look up actual token ID from (cluster, position)
             predicted = self.cluster_to_token[c_pred, p_pred]
             predicted = predicted.clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -844,8 +844,8 @@ class AdaptiveSoftmaxHead(nn.Module):
 
         with torch.no_grad():
             log_probs = self.adaptive.log_prob(h_shift)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, log_probs.reshape(B, T - 1, self.vocab_size)], dim=1)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = log_probs.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
 
@@ -949,9 +949,9 @@ class SemanticHierarchicalHead(nn.Module):
             p_logits = position_logits_base + self.cluster_bias[c_pred]
             p_pred = p_logits.argmax(dim=-1)
             predicted = self.cluster_to_token[c_pred, p_pred].clamp(max=self.vocab_size - 1)
-            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
-            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
-            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
-            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+            scatter_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            scatter_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            full_logits = torch.zeros(B, T, self.vocab_size, device=h.device)
+            full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
