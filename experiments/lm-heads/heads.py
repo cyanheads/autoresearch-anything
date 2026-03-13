@@ -450,3 +450,139 @@ class FactoredMultiExitHead(nn.Module):
             full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
 
         return total_loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 8. Embedding prediction: bypass V-dim projection entirely
+# ---------------------------------------------------------------------------
+
+@register_head("embedding_pred")
+class EmbeddingPredHead(nn.Module):
+    """Predict the next token's embedding directly in D-space.
+
+    No V-dim projection at all. The loss is cosine similarity + a small
+    CE component from nearest-neighbor lookup. All gradient flows in D-space,
+    completely bypassing the rank-D bottleneck.
+
+    For accuracy: find nearest embedding via dot product with the embedding table.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+        # Small MLP to predict embedding of next token
+        self.pred_proj = nn.Linear(d_model, d_model, bias=False)
+        # Reference to embedding table for nearest-neighbor lookup
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        nn.init.normal_(self.pred_proj.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        h_shift = h[:, :-1].reshape(-1, D)
+        targets = x[:, 1:].reshape(-1)
+
+        # Predict next token's embedding
+        pred_emb = self.pred_proj(h_shift)  # (N, D)
+
+        # Get target embeddings
+        target_emb = self.embedding_weight[targets]  # (N, D)
+
+        # Cosine similarity loss (maximize similarity to target embedding)
+        pred_norm = F.normalize(pred_emb, dim=-1)
+        target_norm = F.normalize(target_emb, dim=-1)
+        cosine_loss = 1.0 - (pred_norm * target_norm).sum(dim=-1).mean()
+
+        # Also add a small contrastive component: push away from random negatives
+        n_neg = min(512, self.vocab_size)
+        neg_idx = torch.randint(0, self.vocab_size, (n_neg,), device=h.device)
+        neg_emb = F.normalize(self.embedding_weight[neg_idx], dim=-1)  # (n_neg, D)
+
+        # InfoNCE-style: log(exp(sim_pos) / (exp(sim_pos) + sum(exp(sim_neg))))
+        pos_sim = (pred_norm * target_norm).sum(dim=-1, keepdim=True) / 0.07  # (N, 1)
+        neg_sim = pred_norm @ neg_emb.T / 0.07  # (N, n_neg)
+        nce_logits = torch.cat([pos_sim, neg_sim], dim=1)  # (N, 1+n_neg)
+        nce_labels = torch.zeros(pred_norm.shape[0], dtype=torch.long, device=h.device)
+        nce_loss = F.cross_entropy(nce_logits, nce_labels)
+
+        loss = cosine_loss + nce_loss
+
+        # Accuracy: nearest neighbor in embedding table
+        with torch.no_grad():
+            # Dot product with full embedding table for token prediction
+            sim = pred_emb @ self.embedding_weight.T  # (N, V)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, sim.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 9. Factored with residual conditioning
+# ---------------------------------------------------------------------------
+
+@register_head("factored_residual")
+class FactoredResidualHead(nn.Module):
+    """Factored prediction where factor 2 is conditioned on factor 1's prediction.
+
+    Unlike plain factored (independent f1, f2) or hierarchical (bias conditioning),
+    this feeds the predicted f1 embedding back as input to f2 prediction.
+    This creates a non-linear dependency: f2 = g(h, embed(f1_pred)).
+
+    During training, uses teacher-forced f1 (ground truth) for conditioning.
+    Gradient flows through both the f1 and f2 paths, each with ~√V classes.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.f_size = math.isqrt(vocab_size)
+        if self.f_size * self.f_size < vocab_size:
+            self.f_size += 1
+
+        # Factor 1: independent prediction from h
+        self.proj_f1 = nn.Linear(d_model, self.f_size, bias=False)
+        # Factor 1 embedding: maps predicted cluster to a conditioning vector
+        self.f1_embed = nn.Embedding(self.f_size, d_model)
+        # Factor 2: conditioned on h + f1 embedding
+        self.proj_f2 = nn.Linear(d_model, self.f_size, bias=False)
+
+        nn.init.normal_(self.proj_f1.weight, std=0.02)
+        nn.init.normal_(self.proj_f2.weight, std=0.02)
+        nn.init.normal_(self.f1_embed.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        targets = x[:, 1:].reshape(-1)
+        f1_targets = targets // self.f_size
+        f2_targets = targets % self.f_size
+
+        h_shift = h[:, :-1].reshape(-1, D)
+
+        # Stage 1: predict f1
+        f1_logits = self.proj_f1(h_shift)  # (N, f_size)
+        f1_loss = F.cross_entropy(f1_logits, f1_targets)
+
+        # Stage 2: condition on true f1 during training (teacher forcing)
+        f1_cond = self.f1_embed(f1_targets)  # (N, D)
+        h_conditioned = h_shift + f1_cond  # residual conditioning
+        f2_logits = self.proj_f2(h_conditioned)  # (N, f_size)
+        f2_loss = F.cross_entropy(f2_logits, f2_targets)
+
+        loss = f1_loss + f2_loss
+
+        # Accuracy: use predicted f1 for conditioning
+        with torch.no_grad():
+            f1_pred = f1_logits.argmax(dim=-1)
+            f1_cond_pred = self.f1_embed(f1_pred)
+            h_cond_pred = h_shift + f1_cond_pred
+            f2_pred = self.proj_f2(h_cond_pred).argmax(dim=-1)
+            predicted = (f1_pred * self.f_size + f2_pred).clamp(max=self.vocab_size - 1)
+            full_logits = torch.full((h_shift.shape[0], self.vocab_size), -100.0, device=h.device)
+            full_logits.scatter_(1, predicted.unsqueeze(1), 100.0)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, full_logits.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return loss, full_logits
