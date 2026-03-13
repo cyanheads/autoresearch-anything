@@ -654,17 +654,18 @@ class _LearnedBackwardFn(torch.autograd.Function):
         # grad_output: (N, V) — gradient of loss w.r.t. logits
         h, W, B = ctx.saved_tensors
 
+        # Cast to match grad_output dtype (bf16 under autocast)
+        dtype = grad_output.dtype
+        B_cast = B.to(dtype)
+        W_cast = W.to(dtype)
+
         # Gradient w.r.t h: use B instead of W.T
-        # Standard: grad_h = grad_output @ W  (V-dim grad projected to D-space via W)
-        # Ours: grad_h = grad_output @ B.T  (V-dim grad projected via learned B)
-        grad_h = grad_output @ B.T  # (N, D)
+        grad_h = grad_output @ B_cast.T  # (N, D)
 
         # Gradient w.r.t W: standard (so W still learns normally from logit loss)
         grad_W = grad_output.T @ h  # (V, D)
 
         # Gradient w.r.t B: pull toward W.T with gentle regularization
-        # This keeps B in the neighborhood of W.T but allows it to diverge
-        # where divergence improves gradient quality
         grad_B = (B - W.T) * 0.01
 
         return grad_h, grad_W, grad_B
