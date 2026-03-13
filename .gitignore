@@ -28,3 +28,5 @@ models/
 results.tsv
 run.log
 program.md
+experiments/lm-heads/run.log
+experiments/lm-heads/results.tsv

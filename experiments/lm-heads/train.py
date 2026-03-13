@@ -1,0 +1,286 @@
+"""
+experiments/lm-heads/train.py
+
+SpamLang training script for LM head experiments.
+Trains a small transformer on the SpamLang synthetic language (repeat one token)
+and reports metrics for the autoresearch experiment loop.
+
+Usage:
+    python train.py [--head-type baseline] [--vocab-size 32768] [--steps 5000]
+"""
+
+import argparse
+import math
+import sys
+import time
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from heads import build_head
+
+
+# ---------------------------------------------------------------------------
+# SpamLang data generation
+# ---------------------------------------------------------------------------
+
+def make_spamlang_batch(
+    batch_size: int,
+    seq_len: int,
+    vocab_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Each sequence is one token repeated seq_len times."""
+    tokens = torch.randint(0, vocab_size, (batch_size, 1), device=device)
+    return tokens.expand(batch_size, seq_len).contiguous()
+
+
+# ---------------------------------------------------------------------------
+# Minimal transformer backbone
+# ---------------------------------------------------------------------------
+
+class TransformerBackbone(nn.Module):
+    """Lightweight decoder-only transformer (no KV cache — training only)."""
+
+    def __init__(self, vocab_size: int, d_model: int, n_heads: int, n_layers: int, d_ff: int):
+        super().__init__()
+        self.d_model = d_model
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_emb = nn.Embedding(1024, d_model)  # max 1024 positions
+        self.layers = nn.ModuleList([
+            TransformerBlock(d_model, n_heads, d_ff) for _ in range(n_layers)
+        ])
+        self.norm = nn.RMSNorm(d_model)
+        self._init_weights()
+
+    def _init_weights(self):
+        nn.init.normal_(self.tok_emb.weight, std=0.02)
+        nn.init.normal_(self.pos_emb.weight, std=0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T = x.shape
+        positions = torch.arange(T, device=x.device).unsqueeze(0)
+        h = self.tok_emb(x) + self.pos_emb(positions)
+        for layer in self.layers:
+            h = layer(h)
+        return self.norm(h)
+
+
+class TransformerBlock(nn.Module):
+    def __init__(self, d_model: int, n_heads: int, d_ff: int):
+        super().__init__()
+        self.attn_norm = nn.RMSNorm(d_model)
+        self.attn = CausalSelfAttention(d_model, n_heads)
+        self.ff_norm = nn.RMSNorm(d_model)
+        self.ff = FeedForward(d_model, d_ff)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.attn_norm(x))
+        x = x + self.ff(self.ff_norm(x))
+        return x
+
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, d_model: int, n_heads: int):
+        super().__init__()
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+        self.qkv = nn.Linear(d_model, 3 * d_model, bias=False)
+        self.out = nn.Linear(d_model, d_model, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+        qkv = self.qkv(x).reshape(B, T, 3, self.n_heads, self.head_dim)
+        q, k, v = qkv.permute(2, 0, 3, 1, 4).unbind(0)
+        out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.out(out.transpose(1, 2).reshape(B, T, C))
+
+
+class FeedForward(nn.Module):
+    """SwiGLU feed-forward."""
+    def __init__(self, d_model: int, d_ff: int):
+        super().__init__()
+        self.w1 = nn.Linear(d_model, d_ff, bias=False)
+        self.w2 = nn.Linear(d_ff, d_model, bias=False)
+        self.w3 = nn.Linear(d_model, d_ff, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.w2(F.silu(self.w1(x)) * self.w3(x))
+
+
+# ---------------------------------------------------------------------------
+# Full model: backbone + head
+# ---------------------------------------------------------------------------
+
+class SpamLangModel(nn.Module):
+    def __init__(self, backbone: TransformerBackbone, head: nn.Module):
+        super().__init__()
+        self.backbone = backbone
+        self.head = head
+
+    def forward(self, x: torch.Tensor):
+        """Returns (loss, logits) given input token ids."""
+        h = self.backbone(x)
+        return self.head(h, x)
+
+
+# ---------------------------------------------------------------------------
+# Training loop
+# ---------------------------------------------------------------------------
+
+def train(args):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"device: {device}", file=sys.stderr)
+
+    # Model config — matches paper's SpamLang setup (106M non-embedding params)
+    d_model = args.d_model
+    n_heads = args.n_heads
+    n_layers = args.n_layers
+    d_ff = args.d_ff
+    vocab_size = args.vocab_size
+    seq_len = args.seq_len
+    batch_size = args.batch_size
+
+    # Build backbone
+    backbone = TransformerBackbone(vocab_size, d_model, n_heads, n_layers, d_ff)
+
+    # Build head
+    head = build_head(
+        head_type=args.head_type,
+        vocab_size=vocab_size,
+        d_model=d_model,
+        n_layers=n_layers,
+        backbone=backbone,
+    )
+
+    model = SpamLangModel(backbone, head).to(device)
+    model = torch.compile(model)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    n_params_nonemb = n_params - backbone.tok_emb.weight.numel() - backbone.pos_emb.weight.numel()
+    print(f"params: {n_params:,}  (non-embedding: {n_params_nonemb:,})", file=sys.stderr)
+
+    # Optimizer
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=args.lr,
+        betas=(0.9, 0.95),
+        weight_decay=0.01,
+        fused=True,
+    )
+
+    # Cosine LR schedule with warmup
+    warmup_steps = args.warmup_steps
+    total_steps = args.steps
+
+    def lr_schedule(step):
+        if step < warmup_steps:
+            return step / warmup_steps
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_schedule)
+
+    # Training
+    start_time = time.time()
+    best_val_loss = float("inf")
+    log_interval = max(1, total_steps // 20)
+
+    for step in range(1, total_steps + 1):
+        model.train()
+        batch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
+
+        loss, _ = model(batch)
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        optimizer.step()
+        scheduler.step()
+
+        if step % log_interval == 0 or step == 1:
+            # Validation
+            model.eval()
+            val_losses = []
+            val_correct = 0
+            val_total = 0
+            with torch.no_grad():
+                for _ in range(10):
+                    vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
+                    vloss, vlogits = model(vbatch)
+                    val_losses.append(vloss.item())
+                    # Accuracy: does the model predict the repeated token at positions 1+?
+                    preds = vlogits[:, :-1].argmax(dim=-1)  # predictions for positions 1..T-1
+                    targets = vbatch[:, 1:]
+                    val_correct += (preds == targets).sum().item()
+                    val_total += targets.numel()
+
+            avg_val_loss = sum(val_losses) / len(val_losses)
+            val_acc = val_correct / val_total
+            elapsed = time.time() - start_time
+
+            print(
+                f"step {step}/{total_steps}  "
+                f"train_loss={loss.item():.4f}  "
+                f"val_loss={avg_val_loss:.4f}  "
+                f"val_acc={val_acc:.4f}  "
+                f"lr={scheduler.get_last_lr()[0]:.2e}  "
+                f"time={elapsed:.1f}s",
+                file=sys.stderr,
+            )
+
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+
+    # Final evaluation
+    model.eval()
+    val_losses = []
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for _ in range(50):
+            vbatch = make_spamlang_batch(batch_size, seq_len, vocab_size, device)
+            vloss, vlogits = model(vbatch)
+            val_losses.append(vloss.item())
+            preds = vlogits[:, :-1].argmax(dim=-1)
+            targets = vbatch[:, 1:]
+            val_correct += (preds == targets).sum().item()
+            val_total += targets.numel()
+
+    final_val_loss = sum(val_losses) / len(val_losses)
+    final_val_acc = val_correct / val_total
+    wall_time = time.time() - start_time
+
+    peak_vram = torch.cuda.max_memory_allocated(device) / 1e6 if torch.cuda.is_available() else 0
+
+    # Report metrics (stdout — captured by autoresearch)
+    print(f"val_loss: {final_val_loss:.6f}")
+    print(f"val_accuracy: {final_val_acc:.6f}")
+    print(f"train_loss: {loss.item():.6f}")
+    print(f"wall_time_s: {wall_time:.1f}")
+    print(f"peak_vram_mb: {peak_vram:.0f}")
+    print(f"head_type: {args.head_type}")
+    print(f"vocab_size: {vocab_size}")
+    print(f"d_model: {d_model}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="SpamLang LM Head Experiment")
+    parser.add_argument("--head-type", type=str, default="baseline")
+    parser.add_argument("--vocab-size", type=int, default=32768)
+    parser.add_argument("--d-model", type=int, default=576)
+    parser.add_argument("--n-heads", type=int, default=9)
+    parser.add_argument("--n-layers", type=int, default=30)
+    parser.add_argument("--d-ff", type=int, default=1536)
+    parser.add_argument("--seq-len", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--steps", type=int, default=5000)
+    parser.add_argument("--warmup-steps", type=int, default=500)
+    parser.add_argument("--lr", type=float, default=5e-4)
+    args = parser.parse_args()
+    train(args)
+
+
+if __name__ == "__main__":
+    main()

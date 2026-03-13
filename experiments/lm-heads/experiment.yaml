@@ -1,0 +1,120 @@
+# experiment.yaml — Novel LM Head Design
+#
+# Motivated by "Lost in Backpropagation" (Godey & Artzi, 2026):
+# The standard linear LM head destroys 95-99% of gradient norm during
+# backpropagation due to rank-D compression. We experiment with alternative
+# head designs that preserve more gradient signal.
+#
+# Testbed: SpamLang — a trivial synthetic language where each sequence is
+# one token repeated. The model provably has sufficient expressivity, so
+# any failure is purely an optimization issue caused by the gradient bottleneck.
+
+name: lm-head-gradient-bottleneck
+
+description: |
+  Experiment with novel LM head designs to mitigate the gradient bottleneck
+  identified in "Lost in Backpropagation". We use SpamLang (V=32768, D=576)
+  as a controlled testbed where the standard head fails despite sufficient
+  model capacity.
+
+  Head designs to explore:
+  - baseline: Standard linear W ∈ R^{V×D} + cross-entropy
+  - hierarchical: Two-stage factored softmax (cluster → token)
+  - contrastive_aux: Standard head + contrastive loss in D-space
+  - multi_exit: Heads at multiple layers, logits summed
+  - factored: Predict (high_bits, low_bits) independently
+  - any novel ideas that emerge during experimentation
+
+  The key constraint from the paper: any f(h) has Jacobian rank ≤ D w.r.t h.
+  So we need approaches that either bypass the head entirely (aux losses),
+  reduce effective V per stage (hierarchical/factored), or provide gradient
+  signal through alternative paths (multi-exit).
+
+artifacts:
+  - path: train.py
+    description: >
+      Main training script. Takes --head-type argument to select head design.
+      Contains SpamLang data generation, transformer model, training loop,
+      and metric reporting. The head implementations and training logic are
+      all fair game for modification.
+  - path: heads.py
+    description: >
+      LM head implementations. Each head class defines forward() for logit
+      computation and loss() for the training objective. This is the primary
+      file to modify between experiments.
+
+immutable:
+  - path: docs/
+    reason: Reference material (paper PDF + ideas doc)
+
+evaluate:
+  command: "cd experiments/lm-heads && CUDA_VISIBLE_DEVICES=1 uv run python train.py > run.log 2>&1"
+  timeout: 1200
+
+  metrics:
+    - name: val_loss
+      extract: "grep '^val_loss:' experiments/lm-heads/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      primary: true
+
+    - name: val_accuracy
+      extract: "grep '^val_accuracy:' experiments/lm-heads/run.log | tail -1 | awk '{print $2}'"
+      direction: maximize
+
+    - name: train_loss
+      extract: "grep '^train_loss:' experiments/lm-heads/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+
+    - name: wall_time_s
+      extract: "grep '^wall_time_s:' experiments/lm-heads/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 1200
+
+    - name: peak_vram_mb
+      extract: "grep '^peak_vram_mb:' experiments/lm-heads/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 24000
+
+  crash_signals:
+    - Non-zero exit code
+    - CUDA out of memory
+    - Primary metric missing from output
+    - NaN detected
+
+strategy:
+  type: explore
+  keep_when: >
+    val_loss improves over current best, OR val_loss is within 10% of best
+    but val_accuracy is substantially higher, OR a novel head design shows
+    promising learning dynamics even if not yet best (park it)
+  on_discard: revert
+  baseline: first_run
+
+constraints:
+  time_budget_per_run: 900
+  max_consecutive_failures: 5
+
+context:
+  - path: docs/ideas.md
+    description: Analysis of promising directions from the paper
+  - path: heads.py
+    description: Current head implementations — understand before modifying
+
+log:
+  format: tsv
+  path: results.tsv
+  columns:
+    - experiment
+    - parent
+    - commit
+    - head_type
+    - val_loss
+    - val_accuracy
+    - train_loss
+    - wall_time_s
+    - peak_vram_mb
+    - status
+    - description
+    - tags

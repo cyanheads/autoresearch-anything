@@ -8,9 +8,18 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "jinja2>=3.1",
+    "torch>=2.6.0",
 ]
 
 [project.optional-dependencies]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
 
 [build-system]
 requires = ["hatchling"]
