@@ -734,6 +734,68 @@ class BaselineFactoredAuxHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# 11b. Baseline + embedding prediction auxiliary
+# ---------------------------------------------------------------------------
+
+@register_head("baseline_emb_aux")
+class BaselineEmbAuxHead(nn.Module):
+    """Baseline head for prediction + embedding prediction aux for gradient quality.
+
+    Unlike baseline_factored_aux where the aux used meaningless arithmetic
+    decomposition, this aux pushes hidden states toward the target token's
+    actual embedding using cosine similarity + InfoNCE. This gradient signal
+    is semantically meaningful and flows entirely in D-space (no V-dim bottleneck).
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+
+        # Primary: standard baseline head
+        self.proj = nn.Linear(d_model, vocab_size, bias=False)
+        nn.init.normal_(self.proj.weight, std=0.02)
+
+        # Aux: embedding prediction (cosine + InfoNCE in D-space)
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else self.proj.weight
+        self.aux_weight = 1.0  # stronger aux weight since signal is meaningful
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+        targets = x[:, 1:].reshape(-1)
+
+        # Primary loss: standard CE over full V
+        logits = self.proj(h)
+        ce_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            targets,
+        )
+
+        # Aux loss: cosine + InfoNCE in D-space
+        h_shift = h[:, :-1].reshape(-1, D)
+        target_emb = self.embedding_weight[targets]
+
+        h_norm = F.normalize(h_shift, dim=-1)
+        t_norm = F.normalize(target_emb, dim=-1)
+
+        cosine_loss = 1.0 - (h_norm * t_norm).sum(dim=-1).mean()
+
+        # InfoNCE with random negatives
+        n_neg = min(1024, self.vocab_size)
+        neg_idx = torch.randint(0, self.vocab_size, (n_neg,), device=h.device)
+        neg_emb = F.normalize(self.embedding_weight[neg_idx], dim=-1)
+
+        pos_sim = (h_norm * t_norm).sum(dim=-1, keepdim=True) / 0.07
+        neg_sim = h_norm @ neg_emb.T / 0.07
+        nce_logits = torch.cat([pos_sim, neg_sim], dim=1)
+        nce_labels = torch.zeros(h_norm.shape[0], dtype=torch.long, device=h.device)
+        nce_loss = F.cross_entropy(nce_logits, nce_labels)
+
+        loss = ce_loss + self.aux_weight * (cosine_loss + nce_loss)
+
+        return loss, logits  # baseline logits for accuracy
+
+
+# ---------------------------------------------------------------------------
 # 12. Semantic factored: factored prediction with embedding-based clustering
 # ---------------------------------------------------------------------------
 
