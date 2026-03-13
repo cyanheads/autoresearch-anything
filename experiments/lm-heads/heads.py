@@ -107,6 +107,51 @@ class BaselineTiedHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# 1c. Tied head + MLP expansion
+# ---------------------------------------------------------------------------
+
+@register_head("tied_mlp")
+class TiedMLPHead(nn.Module):
+    """Weight-tied head with MLP expansion: h → SwiGLU expand(D→4D) → project using W_emb.T.
+
+    Combines weight tying (better gradient conditioning from tied embeddings)
+    with MLP expansion (4x gradient rank). The MLP transforms h before
+    projecting with the tied embedding, giving the gradient more degrees of
+    freedom while maintaining embedding quality.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+        # MLP expansion: D → 4D → D (back to D for compatibility with embedding)
+        expand_dim = d_model * 4
+        self.w1 = nn.Linear(d_model, expand_dim, bias=False)
+        self.w3 = nn.Linear(d_model, expand_dim, bias=False)
+        self.down = nn.Linear(expand_dim, d_model, bias=False)
+        self.norm = nn.RMSNorm(d_model)
+
+        nn.init.normal_(self.w1.weight, std=0.02)
+        nn.init.normal_(self.w3.weight, std=0.02)
+        nn.init.normal_(self.down.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        # MLP expansion + down-project back to D
+        expanded = F.silu(self.w1(h)) * self.w3(h)
+        h_transformed = self.norm(self.down(expanded))
+
+        # Weight-tied projection
+        logits = h_transformed @ self.embedding_weight.T
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
 # 2. Hierarchical softmax: two-stage factored prediction
 # ---------------------------------------------------------------------------
 
