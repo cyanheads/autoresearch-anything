@@ -73,6 +73,40 @@ class BaselineHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# 1b. Baseline with weight tying (standard modern LM practice)
+# ---------------------------------------------------------------------------
+
+@register_head("baseline_tied")
+class BaselineTiedHead(nn.Module):
+    """Baseline head with weight tying: output projection = input embedding.T.
+
+    Standard practice in modern LMs (GPT-2, LLaMA, etc). The output projection
+    matrix is NOT a separate parameter — it shares weights with the input
+    embedding table. This means:
+    - Head gradient directly improves input embeddings
+    - Embedding is trained bidirectionally (input reconstruction + output prediction)
+    - Weight matrix is better conditioned than random initialization
+    - Reduces total parameter count by V*D (significant for large V)
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        # Tie to backbone's input embedding — NO separate weight
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        # logits = h @ W_emb.T (weight-tied)
+        logits = h @ self.embedding_weight.T
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
 # 2. Hierarchical softmax: two-stage factored prediction
 # ---------------------------------------------------------------------------
 
