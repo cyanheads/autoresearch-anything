@@ -806,7 +806,90 @@ class SemanticFactoredHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# 12. Semantic hierarchical: semantic clusters + cluster-conditioned prediction
+# 13. Adaptive softmax: frequency-based token grouping
+# ---------------------------------------------------------------------------
+
+@register_head("adaptive_softmax")
+class AdaptiveSoftmaxHead(nn.Module):
+    """Adaptive softmax: frequent tokens get full-rank head, rare tokens share smaller heads.
+
+    Splits vocabulary into frequency bands. The most common tokens (band 0) are
+    predicted with a full D-dim linear layer. Rarer bands use progressively smaller
+    intermediate projections (D → D//4 → V_band), reducing computation and — crucially —
+    changing the gradient dynamics.
+
+    Uses PyTorch's built-in AdaptiveLogSoftmaxWithLoss.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.d_model = d_model
+
+        # Frequency cutoffs: top 2k tokens in band 0, next 10k in band 1, rest in band 2
+        cutoffs = [c for c in [2000, 10000] if c < vocab_size]
+
+        self.adaptive = nn.AdaptiveLogSoftmaxWithLoss(
+            d_model, vocab_size, cutoffs=cutoffs, div_value=4.0,
+        )
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        h_shift = h[:, :-1].reshape(-1, D)
+        targets = x[:, 1:].reshape(-1)
+
+        output = self.adaptive(h_shift, targets)
+        loss = output.loss
+
+        with torch.no_grad():
+            log_probs = self.adaptive.log_prob(h_shift)
+            pad = torch.zeros(B, 1, self.vocab_size, device=h.device)
+            full_logits = torch.cat([pad, log_probs.reshape(B, T - 1, self.vocab_size)], dim=1)
+
+        return loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 14. MLP head: expand dimensionality before V-dim projection
+# ---------------------------------------------------------------------------
+
+@register_head("mlp_head")
+class MLPHead(nn.Module):
+    """MLP head: h → SwiGLU expand(D→4D) → project(4D→V).
+
+    The expansion gives the gradient 4x more channels through the bottleneck.
+    Jacobian rank becomes min(4D, V) instead of min(D, V).
+    With D=576, 4D=2304, V=50257: rank 2304 vs rank 576 — 4x more gradient info.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, **kwargs):
+        super().__init__()
+        expand_dim = d_model * 4
+
+        self.w1 = nn.Linear(d_model, expand_dim, bias=False)
+        self.w3 = nn.Linear(d_model, expand_dim, bias=False)
+        self.proj = nn.Linear(expand_dim, vocab_size, bias=False)
+        self.norm = nn.RMSNorm(expand_dim)
+
+        nn.init.normal_(self.w1.weight, std=0.02)
+        nn.init.normal_(self.w3.weight, std=0.02)
+        nn.init.normal_(self.proj.weight, std=0.02)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        expanded = F.silu(self.w1(h)) * self.w3(h)
+        expanded = self.norm(expanded)
+        logits = self.proj(expanded)
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 15. Semantic hierarchical: semantic clusters + cluster-conditioned prediction
 # ---------------------------------------------------------------------------
 
 @register_head("semantic_hierarchical")
