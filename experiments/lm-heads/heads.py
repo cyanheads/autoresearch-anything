@@ -107,6 +107,58 @@ class BaselineTiedHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# 1b2. Tied head + gentle embedding aux
+# ---------------------------------------------------------------------------
+
+@register_head("tied_emb_aux")
+class TiedEmbAuxHead(nn.Module):
+    """Weight-tied head + gentle embedding aux (weight 0.1).
+
+    Combines weight tying (best performer so far) with a small cosine+InfoNCE
+    aux signal in D-space. The aux weight is 10x smaller than exp 18 (which
+    hurt badly at 1.0). Hypothesis: gentle D-space gradient complements the
+    tied CE gradient without overwhelming it.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        self.aux_weight = 0.1
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+        targets = x[:, 1:].reshape(-1)
+
+        # Primary: weight-tied CE
+        logits = h @ self.embedding_weight.T
+        ce_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            targets,
+        )
+
+        # Aux: cosine + InfoNCE in D-space (gentle)
+        h_shift = h[:, :-1].reshape(-1, D)
+        target_emb = self.embedding_weight[targets]
+        h_norm = F.normalize(h_shift, dim=-1)
+        t_norm = F.normalize(target_emb, dim=-1)
+
+        cosine_loss = 1.0 - (h_norm * t_norm).sum(dim=-1).mean()
+
+        n_neg = min(1024, self.vocab_size)
+        neg_idx = torch.randint(0, self.vocab_size, (n_neg,), device=h.device)
+        neg_emb = F.normalize(self.embedding_weight[neg_idx], dim=-1)
+        pos_sim = (h_norm * t_norm).sum(dim=-1, keepdim=True) / 0.07
+        neg_sim = h_norm @ neg_emb.T / 0.07
+        nce_logits = torch.cat([pos_sim, neg_sim], dim=1)
+        nce_labels = torch.zeros(h_norm.shape[0], dtype=torch.long, device=h.device)
+        nce_loss = F.cross_entropy(nce_logits, nce_labels)
+
+        loss = ce_loss + self.aux_weight * (cosine_loss + nce_loss)
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
 # 1c. Tied head + MLP expansion
 # ---------------------------------------------------------------------------
 
