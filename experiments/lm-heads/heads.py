@@ -657,13 +657,13 @@ class _LearnedBackwardFn(torch.autograd.Function):
         # Cast to match grad_output dtype (bf16 under autocast)
         dtype = grad_output.dtype
         B_cast = B.to(dtype)
-        W_cast = W.to(dtype)
+        h_cast = h.to(dtype)
 
         # Gradient w.r.t h: use B instead of W.T
         grad_h = grad_output @ B_cast.T  # (N, D)
 
         # Gradient w.r.t W: standard (so W still learns normally from logit loss)
-        grad_W = grad_output.T @ h  # (V, D)
+        grad_W = grad_output.T @ h_cast  # (V, D)
 
         # Gradient w.r.t B: pull toward W.T with gentle regularization
         grad_B = (B - W.T) * 0.01
