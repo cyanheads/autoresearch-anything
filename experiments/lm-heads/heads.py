@@ -1555,3 +1555,39 @@ class TiedCosineHead(nn.Module):
             x[:, 1:].reshape(-1),
         )
         return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 25. Tied with input residual: skip connection from input embeddings
+# ---------------------------------------------------------------------------
+
+@register_head("tied_input_residual")
+class TiedInputResidualHead(nn.Module):
+    """Weight-tied head with residual from input embeddings.
+
+    logits = (h + alpha * embed(x_current)) @ W_emb.T
+
+    Adds a learned-weighted skip connection from the input embedding of the
+    current token to the hidden state before projection. The input embedding
+    carries token identity information that may help the head focus on the
+    right vocabulary region. The alpha parameter controls the strength.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        self.alpha = nn.Parameter(torch.tensor(0.1))
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        # Add weighted input embedding to hidden state
+        input_emb = self.embedding_weight[x]  # (B, T, D)
+        h_combined = h + self.alpha * input_emb
+
+        logits = h_combined @ self.embedding_weight.T
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
