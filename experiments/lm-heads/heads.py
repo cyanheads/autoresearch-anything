@@ -107,6 +107,54 @@ class BaselineTiedHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# 1b3. Tied head + gradient scaling
+# ---------------------------------------------------------------------------
+
+@register_head("tied_grad_scale")
+class TiedGradScaleHead(nn.Module):
+    """Weight-tied head with gradient amplification.
+
+    If the bottleneck destroys 95-99% of gradient norm, amplifying the gradient
+    flowing back through the head might compensate. Uses a custom autograd function
+    to scale the backward pass gradient by a factor (e.g., V/D ≈ 87x) while
+    leaving the forward pass unchanged.
+
+    Combined with weight tying for better conditioning.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        # Scale factor: sqrt(V/D) to partially compensate for gradient compression
+        self.grad_scale = (vocab_size / d_model) ** 0.5  # ~9.3x for V=50257, D=576
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        # Apply gradient scaling in backward pass only
+        h_scaled = _GradScale.apply(h, self.grad_scale)
+        logits = h_scaled @ self.embedding_weight.T
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+class _GradScale(torch.autograd.Function):
+    """Scale gradient in backward pass without affecting forward pass."""
+
+    @staticmethod
+    def forward(ctx, x, scale):
+        ctx.scale = scale
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output * ctx.scale, None
+
+
+# ---------------------------------------------------------------------------
 # 1b2. Tied head + gentle embedding aux
 # ---------------------------------------------------------------------------
 
