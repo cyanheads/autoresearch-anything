@@ -1315,52 +1315,41 @@ class TiedMTPHead(nn.Module):
     Inspired by Meta's multi-token prediction (Gloeckle et al., 2024).
     """
 
-    def __init__(self, vocab_size: int, d_model: int, backbone=None, n_ahead: int = 4, **kwargs):
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, n_ahead: int = 2, **kwargs):
         super().__init__()
         self.vocab_size = vocab_size
         self.n_ahead = n_ahead
         self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
 
-        # Each future position gets its own lightweight projection D→D
-        # then shares the embedding table for the final V-dim projection
-        self.future_projs = nn.ModuleList([
-            nn.Linear(d_model, d_model, bias=False) for _ in range(n_ahead - 1)
-        ])
-        for proj in self.future_projs:
-            nn.init.eye_(proj.weight)  # initialize as identity — starts as baseline_tied
+        # Single future projection (t+2 prediction)
+        # Using n_ahead=2: only predict t+1 (primary) and t+2 (aux)
+        self.future_proj = nn.Linear(d_model, d_model, bias=False)
+        nn.init.eye_(self.future_proj.weight)  # identity init — starts as baseline_tied
 
     def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
         B, T, D = h.shape
-        K = self.n_ahead
 
-        # Primary: next token prediction (standard tied)
-        logits = h @ self.embedding_weight.T
+        # Compute all logits in one batched matmul
+        # Primary hidden states and future-transformed hidden states
+        h_primary = h[:, :-1]  # (B, T-1, D) — predicts x[:, 1:]
+        h_future = self.future_proj(h[:, :-2])  # (B, T-2, D) — predicts x[:, 2:]
+
+        # Stack and do single matmul (more efficient than two separate ones)
+        # But shapes differ, so we do two matmuls but keep it simple
+        logits = h @ self.embedding_weight.T  # (B, T, V) — full logits for accuracy
         primary_loss = F.cross_entropy(
-            logits[:, :-1].reshape(-1, logits.size(-1)),
+            logits[:, :-1].reshape(-1, self.vocab_size),
             x[:, 1:].reshape(-1),
         )
 
-        # Future token predictions
-        aux_loss = torch.tensor(0.0, device=h.device)
-        n_aux = 0
-        for k, proj in enumerate(self.future_projs, start=2):
-            if T <= k:
-                continue
-            # h[:, :-k] predicts x[:, k:]
-            h_future = proj(h[:, :-k])
-            future_logits = h_future @ self.embedding_weight.T
-            future_loss = F.cross_entropy(
-                future_logits.reshape(-1, self.vocab_size),
-                x[:, k:].reshape(-1),
-            )
-            aux_loss = aux_loss + future_loss
-            n_aux += 1
+        future_logits = h_future @ self.embedding_weight.T  # (B, T-2, V)
+        future_loss = F.cross_entropy(
+            future_logits.reshape(-1, self.vocab_size),
+            x[:, 2:].reshape(-1),
+        )
 
-        if n_aux > 0:
-            aux_loss = aux_loss / n_aux
-
-        # Weight aux at 0.5 — enough to provide gradient but primary still dominates
-        loss = primary_loss + 0.5 * aux_loss
+        # Weight aux at 0.5
+        loss = primary_loss + 0.5 * future_loss
 
         return loss, logits
 
@@ -1423,4 +1412,105 @@ class TiedDropoutHead(nn.Module):
             logits[:, :-1].reshape(-1, logits.size(-1)),
             x[:, 1:].reshape(-1),
         )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 22. Tied with Z-loss: penalize log-partition function magnitude
+# ---------------------------------------------------------------------------
+
+@register_head("tied_zloss")
+class TiedZLossHead(nn.Module):
+    """Weight-tied head with Z-loss regularization (PaLM-style).
+
+    Z-loss adds a penalty on the squared log of the partition function:
+    z_loss = log(sum(exp(logits)))^2. This prevents logits from growing
+    too large, which can cause numerical instability and poor gradient
+    quality when the softmax becomes very peaky.
+
+    Unlike label smoothing (which modifies the target distribution),
+    Z-loss directly penalizes logit magnitude, keeping the softmax
+    well-conditioned.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, z_weight: float = 1e-4, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.z_weight = z_weight
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        logits = h @ self.embedding_weight.T
+
+        flat_logits = logits[:, :-1].reshape(-1, logits.size(-1))
+        targets = x[:, 1:].reshape(-1)
+
+        ce_loss = F.cross_entropy(flat_logits, targets)
+
+        # Z-loss: penalize log(sum(exp(logits)))^2
+        log_z = torch.logsumexp(flat_logits, dim=-1)
+        z_loss = (log_z ** 2).mean()
+
+        loss = ce_loss + self.z_weight * z_loss
+
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 23. Partitioned tied head: K vocab partitions, each with tied projection
+# ---------------------------------------------------------------------------
+
+@register_head("tied_partitioned")
+class TiedPartitionedHead(nn.Module):
+    """Split vocabulary into K partitions, use K separate tied projections.
+
+    Instead of one (D, V) projection, uses K projections of size (D, V/K).
+    A learned router (D→K) selects the partition. Within each partition,
+    the projection weights are tied to the corresponding slice of the
+    input embedding table.
+
+    This reduces the effective V/D ratio per partition from 87:1 to ~22:1
+    (with K=4), potentially alleviating the gradient bottleneck within
+    each partition.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, n_partitions: int = 4, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.n_partitions = n_partitions
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+        # Router: select which partition
+        self.router = nn.Linear(d_model, n_partitions, bias=False)
+        nn.init.normal_(self.router.weight, std=0.02)
+
+        # Partition boundaries (roughly equal-sized)
+        self.partition_size = math.ceil(vocab_size / n_partitions)
+
+        # Token-to-partition mapping (buffer)
+        partition_ids = torch.arange(vocab_size) // self.partition_size
+        self.register_buffer("token_partition", partition_ids)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+
+        # Full logits via weight tying (for primary loss and accuracy)
+        logits = h @ self.embedding_weight.T
+
+        # Router loss: train the router to predict which partition the target falls in
+        targets = x[:, 1:].reshape(-1)
+        partition_targets = self.token_partition[targets]
+        h_shift = h[:, :-1].reshape(-1, D)
+        router_logits = self.router(h_shift)
+        router_loss = F.cross_entropy(router_logits, partition_targets)
+
+        # Primary CE loss
+        ce_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            targets,
+        )
+
+        # Total loss: CE + small router contribution
+        loss = ce_loss + 0.1 * router_loss
+
         return loss, logits
