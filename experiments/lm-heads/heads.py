@@ -107,6 +107,103 @@ class BaselineTiedHead(nn.Module):
 
 
 # ---------------------------------------------------------------------------
+# 1e. Tied head + low-rank correction
+# ---------------------------------------------------------------------------
+
+@register_head("tied_lowrank")
+class TiedLowRankHead(nn.Module):
+    """Weight-tied head with a low-rank correction term.
+
+    logits = h @ W_emb.T + h @ A @ B
+
+    where A ∈ R^{D×r}, B ∈ R^{r×V}, r << D. The tied projection provides
+    the main prediction, while the low-rank term adds flexibility to adjust
+    logits for tokens whose output representation differs from their input
+    embedding. With r=64, this adds ~3.3M params.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, rank: int = 64, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+        self.A = nn.Linear(d_model, rank, bias=False)
+        self.B = nn.Linear(rank, vocab_size, bias=False)
+
+        nn.init.normal_(self.A.weight, std=0.01)
+        nn.init.zeros_(self.B.weight)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        logits = h @ self.embedding_weight.T + self.B(self.A(h))
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 1f. Tied head + output norm + learned scale
+# ---------------------------------------------------------------------------
+
+@register_head("tied_norm")
+class TiedNormHead(nn.Module):
+    """Weight-tied head with head-specific RMSNorm + learned temperature.
+
+    logits = (RMSNorm(h) * scale) @ W_emb.T
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        self.norm = nn.RMSNorm(d_model)
+        self.logit_scale = nn.Parameter(torch.ones(1))
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        h_normed = self.norm(h) * self.logit_scale
+        logits = h_normed @ self.embedding_weight.T
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 1g. Tied head + output bias
+# ---------------------------------------------------------------------------
+
+@register_head("tied_bias")
+class TiedBiasHead(nn.Module):
+    """Weight-tied head with a learned output bias.
+
+    logits = h @ W_emb.T + b
+
+    Standard weight tying omits bias. Adding a learned bias b ∈ R^V lets the
+    head adjust per-token log-probabilities to match output frequency
+    distribution, which may differ from what embedding similarity gives.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        self.bias = nn.Parameter(torch.zeros(vocab_size))
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        logits = h @ self.embedding_weight.T + self.bias
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
 # 1b3. Tied head + gradient scaling
 # ---------------------------------------------------------------------------
 
