@@ -1514,3 +1514,44 @@ class TiedPartitionedHead(nn.Module):
         loss = ce_loss + 0.1 * router_loss
 
         return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 24. Cosine similarity tied head
+# ---------------------------------------------------------------------------
+
+@register_head("tied_cosine")
+class TiedCosineHead(nn.Module):
+    """Weight-tied head using cosine similarity instead of dot product.
+
+    logits = temperature * cosine_sim(h, embeddings)
+
+    Normalizing both hidden states and embeddings decouples the logit
+    computation from the norms of both vectors, focusing purely on
+    directional alignment. The learned temperature controls the sharpness
+    of the softmax distribution.
+
+    This should improve optimization by removing the confounding effect
+    of vector magnitudes — the model only needs to get directions right.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        # Learnable temperature — start at sqrt(d_model) like attention
+        self.log_temperature = nn.Parameter(torch.tensor(math.log(d_model ** 0.5)))
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        # Normalize hidden states and embeddings
+        h_norm = F.normalize(h, dim=-1)
+        w_norm = F.normalize(self.embedding_weight, dim=-1)
+
+        temperature = self.log_temperature.exp()
+        logits = temperature * (h_norm @ w_norm.T)
+
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
