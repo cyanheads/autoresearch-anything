@@ -1293,3 +1293,134 @@ class SemanticHierarchicalHead(nn.Module):
             full_logits[:, :-1] = scatter_logits.reshape(B, T - 1, self.vocab_size)
 
         return loss, full_logits
+
+
+# ---------------------------------------------------------------------------
+# 19. Multi-token prediction: predict next K tokens simultaneously
+# ---------------------------------------------------------------------------
+
+@register_head("tied_mtp")
+class TiedMTPHead(nn.Module):
+    """Weight-tied head with multi-token prediction (MTP).
+
+    Predicts the next K tokens simultaneously using K separate linear projections
+    that each share the embedding table. Unlike multi-exit (which attaches at
+    different layers), MTP attaches K heads to the SAME final hidden state,
+    each targeting a different future position (t+1, t+2, ..., t+K).
+
+    Each head provides independent gradient through the backbone, and the targets
+    are genuinely different (different future tokens), so gradients don't compete
+    like aux losses do — they reinforce richer representations.
+
+    Inspired by Meta's multi-token prediction (Gloeckle et al., 2024).
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, n_ahead: int = 4, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.n_ahead = n_ahead
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+        # Each future position gets its own lightweight projection D→D
+        # then shares the embedding table for the final V-dim projection
+        self.future_projs = nn.ModuleList([
+            nn.Linear(d_model, d_model, bias=False) for _ in range(n_ahead - 1)
+        ])
+        for proj in self.future_projs:
+            nn.init.eye_(proj.weight)  # initialize as identity — starts as baseline_tied
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        B, T, D = h.shape
+        K = self.n_ahead
+
+        # Primary: next token prediction (standard tied)
+        logits = h @ self.embedding_weight.T
+        primary_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+
+        # Future token predictions
+        aux_loss = torch.tensor(0.0, device=h.device)
+        n_aux = 0
+        for k, proj in enumerate(self.future_projs, start=2):
+            if T <= k:
+                continue
+            # h[:, :-k] predicts x[:, k:]
+            h_future = proj(h[:, :-k])
+            future_logits = h_future @ self.embedding_weight.T
+            future_loss = F.cross_entropy(
+                future_logits.reshape(-1, self.vocab_size),
+                x[:, k:].reshape(-1),
+            )
+            aux_loss = aux_loss + future_loss
+            n_aux += 1
+
+        if n_aux > 0:
+            aux_loss = aux_loss / n_aux
+
+        # Weight aux at 0.5 — enough to provide gradient but primary still dominates
+        loss = primary_loss + 0.5 * aux_loss
+
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 20. Tied with label smoothing
+# ---------------------------------------------------------------------------
+
+@register_head("tied_smooth")
+class TiedSmoothHead(nn.Module):
+    """Weight-tied head with label smoothing.
+
+    Label smoothing redistributes a fraction of the target probability mass
+    uniformly across all tokens. This prevents the model from becoming
+    overconfident, keeps gradients non-zero for non-target tokens, and
+    acts as a regularizer. With weight tying already providing regularization
+    through shared weights, smoothing may compound the benefit.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, smoothing: float = 0.1, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.smoothing = smoothing
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        logits = h @ self.embedding_weight.T
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+            label_smoothing=self.smoothing,
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 21. Tied with dropout before projection
+# ---------------------------------------------------------------------------
+
+@register_head("tied_dropout")
+class TiedDropoutHead(nn.Module):
+    """Weight-tied head with dropout on hidden states before projection.
+
+    Dropout before the V-dim projection prevents co-adaptation between
+    specific hidden dimensions and embedding directions. This forces the
+    backbone to distribute information more broadly across dimensions,
+    potentially improving generalization.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, drop_rate: float = 0.1, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+        self.dropout = nn.Dropout(drop_rate)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        h_dropped = self.dropout(h)
+        logits = h_dropped @ self.embedding_weight.T
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
