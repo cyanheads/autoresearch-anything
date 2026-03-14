@@ -1591,3 +1591,72 @@ class TiedInputResidualHead(nn.Module):
             x[:, 1:].reshape(-1),
         )
         return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 26. Embedding-initialized untied head
+# ---------------------------------------------------------------------------
+
+@register_head("emb_init")
+class EmbInitHead(nn.Module):
+    """Standard head initialized from the input embedding weights.
+
+    Copies the embedding table to the output projection at init, then
+    lets them diverge during training. Combines the benefit of embedding-
+    quality initialization with the freedom for the output head to specialize.
+
+    Unlike weight tying, the embedding and head can represent different
+    information — the head can develop output-specific directions that
+    don't constrain input representation quality.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, **kwargs):
+        super().__init__()
+        self.proj = nn.Linear(d_model, vocab_size, bias=False)
+        # Initialize from embedding weights
+        if backbone is not None:
+            with torch.no_grad():
+                self.proj.weight.copy_(backbone.tok_emb.weight)
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        logits = self.proj(h)
+        loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+        return loss, logits
+
+
+# ---------------------------------------------------------------------------
+# 27. Tied with separate learning rate (embedding regularized)
+# ---------------------------------------------------------------------------
+
+@register_head("tied_emb_reg")
+class TiedEmbRegHead(nn.Module):
+    """Weight-tied head with embedding regularization.
+
+    Adds an explicit L2 regularization term on the embedding weights to
+    prevent them from growing too large. With weight tying, the embedding
+    serves double duty (input + output), and large magnitudes could hurt
+    one or both roles. This encourages compact, well-distributed embeddings.
+    """
+
+    def __init__(self, vocab_size: int, d_model: int, backbone=None, reg_weight: float = 1e-3, **kwargs):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.reg_weight = reg_weight
+        self.embedding_weight = backbone.tok_emb.weight if backbone is not None else None
+
+    def forward(self, h: torch.Tensor, x: torch.Tensor, **kwargs):
+        logits = h @ self.embedding_weight.T
+
+        ce_loss = F.cross_entropy(
+            logits[:, :-1].reshape(-1, logits.size(-1)),
+            x[:, 1:].reshape(-1),
+        )
+
+        # L2 regularization on embedding norms
+        emb_norm = (self.embedding_weight ** 2).mean()
+        loss = ce_loss + self.reg_weight * emb_norm
+
+        return loss, logits
