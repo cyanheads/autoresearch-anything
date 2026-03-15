@@ -143,6 +143,23 @@ class SpectralRegularization(Intervention):
         return reg_weight * entropy
 
 
+class WeightDecayCosineDecay(Intervention):
+    """Start with high weight decay, cosine-anneal to low.
+
+    Opposite of wd_ramp. Hypothesis: strong compression pressure early
+    forces the model to find efficient representations from the start,
+    then easing off lets it refine.
+    """
+    def on_step(self, model, optimizer, step, total_steps, metrics):
+        max_wd = self.config.get("wd_max", 3.0)
+        min_wd = self.config.get("wd_min", 0.01)
+        frac = step / max(total_steps, 1)
+        # Cosine from max_wd to min_wd
+        wd = min_wd + 0.5 * (max_wd - min_wd) * (1 + math.cos(math.pi * frac))
+        for pg in optimizer.param_groups:
+            pg["weight_decay"] = wd
+
+
 class PerpGrad(Intervention):
     """Project gradients orthogonal to weight directions (Lyu et al. 2025)."""
     def on_step(self, model, optimizer, step, total_steps, metrics):
@@ -244,6 +261,7 @@ INTERVENTIONS = {
     "adaptive_wd": AdaptiveWD,
     "perp_grad": PerpGrad,
     "perp_grad_adaptive": PerpGradAdaptiveWD,
+    "wd_cosine_decay": WeightDecayCosineDecay,
 }
 
 
