@@ -308,11 +308,11 @@ def parse_args():
 
     # Grokking detection
     p.add_argument("--grok-threshold", type=float, default=0.95)
-    p.add_argument("--n-evals", type=int, default=200,
+    p.add_argument("--n-evals", type=int, default=500,
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="wd_cosine_decay",
+    p.add_argument("--intervention", type=str, default="adaptive_wd",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
                             "lr_spike", "gradient_noise", "spectral_reg",
                             "adaptive_wd", "perp_grad", "perp_grad_adaptive",
@@ -333,7 +333,7 @@ def parse_args():
 
     # Adaptive WD params
     p.add_argument("--adaptive-boost-wd", type=float, default=2.0)
-    p.add_argument("--adaptive-trigger-acc", type=float, default=0.95)
+    p.add_argument("--adaptive-trigger-acc", type=float, default=0.5)
 
     return p.parse_args()
 
