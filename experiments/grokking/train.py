@@ -74,7 +74,7 @@ class GrokTransformer(nn.Module):
                         angle = 2 * math.pi * freq * n / prime
                         self.embed.weight[n, 2 * k] = math.cos(angle)
                         self.embed.weight[n, 2 * k + 1] = math.sin(angle)
-                # Scale down to not dominate other random init
+                # Scale to reasonable magnitude
                 self.embed.weight.mul_(0.1)
 
         self.layers = nn.ModuleList([
@@ -145,7 +145,11 @@ def train(args):
         fourier_init=args.fourier_init,
     ).to(device)
 
-    n_params = sum(p.numel() for p in model.parameters())
+    # Freeze embeddings if requested (use with fourier_init)
+    if args.freeze_embed:
+        model.embed.weight.requires_grad_(False)
+
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"params: {n_params:,}", file=sys.stderr)
 
     # ── Optimizer ──
@@ -312,6 +316,7 @@ def parse_args():
     p.add_argument("--n-layers", type=int, default=2)
     p.add_argument("--init-scale", type=float, default=1.0)
     p.add_argument("--fourier-init", action="store_true", default=True)
+    p.add_argument("--freeze-embed", action="store_true", default=True)
 
     # Training
     p.add_argument("--total-steps", type=int, default=50000)
