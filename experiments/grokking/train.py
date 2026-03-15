@@ -326,9 +326,9 @@ def parse_args():
     p.add_argument("--data-seed", type=int, default=42)
 
     # Architecture
-    p.add_argument("--d-model", type=int, default=256)
+    p.add_argument("--d-model", type=int, default=384)
     p.add_argument("--n-heads", type=int, default=4)
-    p.add_argument("--d-ff", type=int, default=1024)
+    p.add_argument("--d-ff", type=int, default=1536)
     p.add_argument("--n-layers", type=int, default=3)
     p.add_argument("--init-scale", type=float, default=1.0)
     p.add_argument("--fourier-init", action="store_true", default=False)
@@ -337,7 +337,7 @@ def parse_args():
     # Training
     p.add_argument("--total-steps", type=int, default=5000)
     p.add_argument("--batch-size", type=int, default=512)
-    p.add_argument("--lr", type=float, default=4e-3)
+    p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
     p.add_argument("--weight-decay", type=float, default=2.0)
