@@ -312,10 +312,10 @@ def parse_args():
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="adaptive_wd",
+    p.add_argument("--intervention", type=str, default="perp_grad_adaptive",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
                             "lr_spike", "gradient_noise", "spectral_reg",
-                            "adaptive_wd"])
+                            "adaptive_wd", "perp_grad", "perp_grad_adaptive"])
 
     # Intervention-specific params
     p.add_argument("--wd-ramp-frac", type=float, default=0.5)

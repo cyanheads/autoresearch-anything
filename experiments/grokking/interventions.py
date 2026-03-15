@@ -143,6 +143,59 @@ class SpectralRegularization(Intervention):
         return reg_weight * entropy
 
 
+class PerpGrad(Intervention):
+    """Project gradients orthogonal to weight directions (Lyu et al. 2025)."""
+    def on_step(self, model, optimizer, step, total_steps, metrics):
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.grad is not None and p.dim() >= 2:
+                    w_flat = p.data.reshape(-1)
+                    g_flat = p.grad.reshape(-1)
+                    w_norm_sq = w_flat.dot(w_flat)
+                    if w_norm_sq > 1e-10:
+                        proj = w_flat.dot(g_flat) / w_norm_sq
+                        p.grad.sub_(proj * p.data)
+
+
+class PerpGradAdaptiveWD(Intervention):
+    """Combine PerpGrad + adaptive weight decay.
+
+    PerpGrad prevents NLM (logit scaling), adaptive WD forces compression
+    after memorization. They target different failure modes.
+    """
+    def __init__(self, config):
+        super().__init__(config)
+        self.triggered = False
+        self.acc_ema = 0.0
+
+    def on_step(self, model, optimizer, step, total_steps, metrics):
+        # PerpGrad component
+        with torch.no_grad():
+            for p in model.parameters():
+                if p.grad is not None and p.dim() >= 2:
+                    w_flat = p.data.reshape(-1)
+                    g_flat = p.grad.reshape(-1)
+                    w_norm_sq = w_flat.dot(w_flat)
+                    if w_norm_sq > 1e-10:
+                        proj = w_flat.dot(g_flat) / w_norm_sq
+                        p.grad.sub_(proj * p.data)
+
+        # Adaptive WD component
+        base_wd = self.config.get("weight_decay", 0.1)
+        boost_wd = self.config.get("adaptive_boost_wd", 2.0)
+        trigger_acc = self.config.get("adaptive_trigger_acc", 0.95)
+
+        batch_acc = metrics.get("batch_acc", 0.0)
+        self.acc_ema = 0.95 * self.acc_ema + 0.05 * batch_acc
+
+        if not self.triggered and self.acc_ema > trigger_acc:
+            self.triggered = True
+
+        wd = boost_wd if self.triggered else base_wd
+        for pg in optimizer.param_groups:
+            pg["weight_decay"] = wd
+
+
 class AdaptiveWD(Intervention):
     """Reactive weight decay: low during memorization, high after.
 
@@ -189,6 +242,8 @@ INTERVENTIONS = {
     "gradient_noise": GradientNoise,
     "spectral_reg": SpectralRegularization,
     "adaptive_wd": AdaptiveWD,
+    "perp_grad": PerpGrad,
+    "perp_grad_adaptive": PerpGradAdaptiveWD,
 }
 
 
