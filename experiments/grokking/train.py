@@ -321,10 +321,10 @@ def parse_args():
     # Training
     p.add_argument("--total-steps", type=int, default=50000)
     p.add_argument("--batch-size", type=int, default=512)
-    p.add_argument("--lr", type=float, default=5e-3)
+    p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
-    p.add_argument("--weight-decay", type=float, default=0.1)
+    p.add_argument("--weight-decay", type=float, default=0.0)
     p.add_argument("--grad-clip", type=float, default=1.0)
 
     # Grokking detection
@@ -333,7 +333,7 @@ def parse_args():
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="adaptive_wd",
+    p.add_argument("--intervention", type=str, default="perp_grad",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
                             "lr_spike", "gradient_noise", "spectral_reg",
                             "adaptive_wd", "perp_grad", "perp_grad_adaptive",
