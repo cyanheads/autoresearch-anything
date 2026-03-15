@@ -153,12 +153,22 @@ def train(args):
     print(f"params: {n_params:,}", file=sys.stderr)
 
     # ── Optimizer ──
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=args.lr,
-        betas=(args.beta1, args.beta2),
-        weight_decay=args.weight_decay,
-    )
+    if args.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=args.lr,
+            betas=(args.beta1, args.beta2),
+            weight_decay=args.weight_decay,
+        )
+    elif args.optimizer == "sgd":
+        optimizer = torch.optim.SGD(
+            model.parameters(),
+            lr=args.lr,
+            momentum=0.9,
+            weight_decay=args.weight_decay,
+        )
+    else:
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
 
     # ── Intervention ──
     intervention_config = {
@@ -319,21 +329,22 @@ def parse_args():
     p.add_argument("--freeze-embed", action="store_true", default=False)
 
     # Training
-    p.add_argument("--total-steps", type=int, default=50000)
+    p.add_argument("--total-steps", type=int, default=5000)
     p.add_argument("--batch-size", type=int, default=512)
     p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
-    p.add_argument("--weight-decay", type=float, default=0.0)
+    p.add_argument("--weight-decay", type=float, default=0.1)
     p.add_argument("--grad-clip", type=float, default=1.0)
+    p.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "sgd"])
 
     # Grokking detection
     p.add_argument("--grok-threshold", type=float, default=0.95)
-    p.add_argument("--n-evals", type=int, default=500,
+    p.add_argument("--n-evals", type=int, default=1000,
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="perp_grad",
+    p.add_argument("--intervention", type=str, default="adaptive_wd",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
                             "lr_spike", "gradient_noise", "spectral_reg",
                             "adaptive_wd", "perp_grad", "perp_grad_adaptive",
