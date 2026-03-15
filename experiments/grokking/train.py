@@ -287,7 +287,7 @@ def parse_args():
     # Task
     p.add_argument("--prime", type=int, default=113)
     p.add_argument("--operation", type=str, default="add", choices=["add", "sub", "mul"])
-    p.add_argument("--data-fraction", type=float, default=0.5)
+    p.add_argument("--data-fraction", type=float, default=0.7)
     p.add_argument("--data-seed", type=int, default=42)
 
     # Architecture
@@ -312,7 +312,7 @@ def parse_args():
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="perp_grad_adaptive",
+    p.add_argument("--intervention", type=str, default="adaptive_wd",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
                             "lr_spike", "gradient_noise", "spectral_reg",
                             "adaptive_wd", "perp_grad", "perp_grad_adaptive"])
