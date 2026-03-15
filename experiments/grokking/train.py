@@ -290,7 +290,7 @@ def parse_args():
     p.add_argument("--n-heads", type=int, default=4)
     p.add_argument("--d-ff", type=int, default=512)
     p.add_argument("--n-layers", type=int, default=1)
-    p.add_argument("--init-scale", type=float, default=1.0)
+    p.add_argument("--init-scale", type=float, default=0.1)
 
     # Training
     p.add_argument("--total-steps", type=int, default=50000)
@@ -298,7 +298,7 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
-    p.add_argument("--weight-decay", type=float, default=2.0)
+    p.add_argument("--weight-decay", type=float, default=1.0)
     p.add_argument("--grad-clip", type=float, default=1.0)
 
     # Grokking detection
