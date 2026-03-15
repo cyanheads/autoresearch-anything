@@ -1,0 +1,154 @@
+# experiment.yaml — Forcing Grokking On Demand
+#
+# Can we make grokking happen faster, or at a predictable step?
+#
+# Background: Grokking is the phenomenon where neural networks suddenly
+# generalize long after memorizing the training data. It's been observed
+# in modular arithmetic (Power et al. 2022), explained mechanistically
+# (Nanda et al. 2023), and connected to weight norm dynamics (Omnigrok).
+# But nobody can reliably FORCE it to happen at a target step.
+#
+# We explore dynamic training interventions — weight decay schedules,
+# norm targeting, LR perturbations, gradient noise, spectral
+# regularization — to accelerate and control grokking timing.
+
+name: grokking-on-demand
+
+description: |
+  Force grokking to happen faster or at a predictable step through
+  dynamic training interventions. Testbed: 1-layer transformer on
+  modular addition mod 113 (the community standard setup).
+
+  The experiment tracks rich progress measures throughout training:
+  Fourier analysis of embeddings, weight norm trajectory, logit
+  statistics, and spectral entropy. These let us see the circuit
+  formation happening under the surface, even when accuracy hasn't
+  moved yet.
+
+  Key experimental axes:
+  1. Intervention type: weight decay schedules, norm targeting, LR
+     perturbations, gradient noise, spectral regularization, and
+     novel interventions the agent discovers.
+  2. Hyperparameter interaction: how init_scale × weight_decay × lr
+     × data_fraction jointly affect grokking timing.
+  3. Task transfer: do interventions that work on addition also
+     accelerate grokking on multiplication (harder task)?
+  4. Prediction: can progress measures predict grokking onset
+     before it happens?
+
+  The goal is NOT just to make grokking happen (weight decay already
+  does that). The goal is to CONTROL when it happens — minimize
+  grok_step and grok_delay, ideally to the point where the
+  memorization-then-generalization pattern is eliminated entirely.
+
+artifacts:
+  - path: train.py
+    description: >
+      Training script. Model architecture (GrokTransformer), training loop,
+      evaluation, metric reporting. Hyperparameters are CLI args. The agent
+      can modify architecture, training dynamics, optimizer setup, or add
+      new features. Outputs metrics to stdout and progress measures to
+      measures.jsonl.
+  - path: interventions.py
+    description: >
+      Dynamic intervention strategies applied during training. Each
+      intervention can modify optimizer state, add auxiliary losses, or
+      alter gradients. This is the primary experimental surface — add
+      new intervention classes here.
+
+immutable:
+  - path: data.py
+    reason: Dataset generation must be consistent across experiments
+  - path: measures.py
+    reason: Progress measures must be consistent for comparison
+  - path: docs/
+    reason: Reference material
+
+evaluate:
+  command: "cd experiments/grokking && CUDA_VISIBLE_DEVICES=1 uv run python train.py > run.log 2>&1"
+  timeout: 600
+
+  metrics:
+    - name: grok_step
+      extract: "grep '^grok_step:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      primary: true
+
+    - name: grok_delay
+      extract: "grep '^grok_delay:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+
+    - name: final_val_acc
+      extract: "grep '^final_val_acc:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: maximize
+      constraint:
+        min: 0.90
+
+    - name: memorize_step
+      extract: "grep '^memorize_step:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+
+    - name: val_loss
+      extract: "grep '^val_loss:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+
+    - name: wall_time_s
+      extract: "grep '^wall_time_s:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 600
+
+    - name: peak_vram_mb
+      extract: "grep '^peak_vram_mb:' experiments/grokking/run.log | tail -1 | awk '{print $2}'"
+      direction: minimize
+      constraint:
+        max: 24000
+
+  crash_signals:
+    - Non-zero exit code
+    - CUDA out of memory
+    - Primary metric missing from output
+    - NaN detected
+
+strategy:
+  type: explore
+  keep_when: >
+    grok_step improves (grokking happens earlier) while final_val_acc >= 0.95,
+    OR a novel intervention eliminates the memorize-then-generalize pattern
+    entirely (immediate generalization), OR a new task/configuration shows
+    grokking for the first time. Park if an intervention shows partial
+    acceleration or interesting dynamics in the progress measures even if
+    grok_step doesn't beat the current best.
+  on_discard: revert
+  baseline: first_run
+
+constraints:
+  time_budget_per_run: 300
+  max_consecutive_failures: 5
+
+context:
+  - path: docs/research-context.md
+    description: Summary of grokking literature and open questions
+  - path: interventions.py
+    description: Current intervention implementations
+  - path: measures.py
+    description: Progress measure definitions (what's being tracked)
+
+log:
+  format: tsv
+  path: results.tsv
+  columns:
+    - experiment
+    - parent
+    - commit
+    - intervention
+    - grok_step
+    - grok_delay
+    - memorize_step
+    - final_val_acc
+    - val_loss
+    - wall_time_s
+    - peak_vram_mb
+    - status
+    - description
+    - tags
