@@ -286,7 +286,7 @@ def parse_args():
 
     # Task
     p.add_argument("--prime", type=int, default=113)
-    p.add_argument("--operation", type=str, default="add", choices=["add", "sub", "mul"])
+    p.add_argument("--operation", type=str, default="mul", choices=["add", "sub", "mul"])
     p.add_argument("--data-fraction", type=float, default=0.5)
     p.add_argument("--data-seed", type=int, default=42)
 
@@ -300,7 +300,7 @@ def parse_args():
     # Training
     p.add_argument("--total-steps", type=int, default=50000)
     p.add_argument("--batch-size", type=int, default=512)
-    p.add_argument("--lr", type=float, default=5e-3)
+    p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
     p.add_argument("--weight-decay", type=float, default=0.1)
