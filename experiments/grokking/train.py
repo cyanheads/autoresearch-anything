@@ -294,7 +294,7 @@ def parse_args():
     p.add_argument("--d-model", type=int, default=128)
     p.add_argument("--n-heads", type=int, default=4)
     p.add_argument("--d-ff", type=int, default=512)
-    p.add_argument("--n-layers", type=int, default=1)
+    p.add_argument("--n-layers", type=int, default=2)
     p.add_argument("--init-scale", type=float, default=1.0)
 
     # Training
@@ -333,7 +333,7 @@ def parse_args():
 
     # Adaptive WD params
     p.add_argument("--adaptive-boost-wd", type=float, default=2.0)
-    p.add_argument("--adaptive-trigger-acc", type=float, default=0.5)
+    p.add_argument("--adaptive-trigger-acc", type=float, default=0.95)
 
     return p.parse_args()
 
