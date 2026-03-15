@@ -313,7 +313,7 @@ def parse_args():
     p.add_argument("--d-model", type=int, default=256)
     p.add_argument("--n-heads", type=int, default=4)
     p.add_argument("--d-ff", type=int, default=1024)
-    p.add_argument("--n-layers", type=int, default=3)
+    p.add_argument("--n-layers", type=int, default=4)
     p.add_argument("--init-scale", type=float, default=1.0)
     p.add_argument("--fourier-init", action="store_true", default=False)
     p.add_argument("--freeze-embed", action="store_true", default=False)
