@@ -193,8 +193,13 @@ def train(args):
         # Gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
 
+        # Batch accuracy for reactive interventions
+        with torch.no_grad():
+            batch_acc = (logits.detach().argmax(-1) == batch_y).float().mean().item()
+
         # Intervention on_step (may modify gradients/optimizer)
-        intervention.on_step(model, optimizer, step, args.total_steps, {})
+        intervention.on_step(model, optimizer, step, args.total_steps,
+                             {"batch_acc": batch_acc})
 
         optimizer.step()
 
@@ -290,7 +295,7 @@ def parse_args():
     p.add_argument("--n-heads", type=int, default=4)
     p.add_argument("--d-ff", type=int, default=512)
     p.add_argument("--n-layers", type=int, default=1)
-    p.add_argument("--init-scale", type=float, default=0.1)
+    p.add_argument("--init-scale", type=float, default=1.0)
 
     # Training
     p.add_argument("--total-steps", type=int, default=50000)
@@ -298,7 +303,7 @@ def parse_args():
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
-    p.add_argument("--weight-decay", type=float, default=1.0)
+    p.add_argument("--weight-decay", type=float, default=0.1)
     p.add_argument("--grad-clip", type=float, default=1.0)
 
     # Grokking detection
@@ -307,9 +312,10 @@ def parse_args():
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="none",
+    p.add_argument("--intervention", type=str, default="adaptive_wd",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
-                            "lr_spike", "gradient_noise", "spectral_reg"])
+                            "lr_spike", "gradient_noise", "spectral_reg",
+                            "adaptive_wd"])
 
     # Intervention-specific params
     p.add_argument("--wd-ramp-frac", type=float, default=0.5)
@@ -323,6 +329,10 @@ def parse_args():
     p.add_argument("--spike-factor", type=float, default=10.0)
     p.add_argument("--noise-scale", type=float, default=0.01)
     p.add_argument("--spectral-weight", type=float, default=0.001)
+
+    # Adaptive WD params
+    p.add_argument("--adaptive-boost-wd", type=float, default=2.0)
+    p.add_argument("--adaptive-trigger-acc", type=float, default=0.95)
 
     return p.parse_args()
 

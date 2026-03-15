@@ -143,6 +143,41 @@ class SpectralRegularization(Intervention):
         return reg_weight * entropy
 
 
+class AdaptiveWD(Intervention):
+    """Reactive weight decay: low during memorization, high after.
+
+    Monitors batch accuracy. Once train accuracy exceeds a threshold
+    (memorization detected), switches to high weight decay to force
+    the cleanup/compression phase. This is genuinely novel — most
+    grokking work uses static hyperparameters.
+    """
+    def __init__(self, config):
+        super().__init__(config)
+        self.triggered = False
+        self.trigger_step = None
+        self.acc_ema = 0.0
+
+    def on_step(self, model, optimizer, step, total_steps, metrics):
+        base_wd = self.config.get("weight_decay", 0.1)
+        boost_wd = self.config.get("adaptive_boost_wd", 2.0)
+        trigger_acc = self.config.get("adaptive_trigger_acc", 0.95)
+
+        batch_acc = metrics.get("batch_acc", 0.0)
+        self.acc_ema = 0.95 * self.acc_ema + 0.05 * batch_acc
+
+        if not self.triggered and self.acc_ema > trigger_acc:
+            self.triggered = True
+            self.trigger_step = step
+
+        if self.triggered:
+            wd = boost_wd
+        else:
+            wd = base_wd
+
+        for pg in optimizer.param_groups:
+            pg["weight_decay"] = wd
+
+
 # ── Registry ──────────────────────────────────────────────────────────
 
 INTERVENTIONS = {
@@ -153,6 +188,7 @@ INTERVENTIONS = {
     "lr_spike": LRSpike,
     "gradient_noise": GradientNoise,
     "spectral_reg": SpectralRegularization,
+    "adaptive_wd": AdaptiveWD,
 }
 
 
