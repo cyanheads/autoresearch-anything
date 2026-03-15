@@ -337,12 +337,12 @@ def parse_args():
     # Training
     p.add_argument("--total-steps", type=int, default=5000)
     p.add_argument("--batch-size", type=int, default=512)
-    p.add_argument("--lr", type=float, default=5e-3)
+    p.add_argument("--lr", type=float, default=4e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
     p.add_argument("--weight-decay", type=float, default=2.0)
     p.add_argument("--grad-clip", type=float, default=1.0)
-    p.add_argument("--warmup-steps", type=int, default=100)
+    p.add_argument("--warmup-steps", type=int, default=50)
     p.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "sgd"])
 
     # Grokking detection
