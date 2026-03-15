@@ -364,8 +364,8 @@ def parse_args():
     p.add_argument("--spectral-weight", type=float, default=0.001)
 
     # Adaptive WD params
-    p.add_argument("--adaptive-boost-wd", type=float, default=2.0)
-    p.add_argument("--adaptive-trigger-acc", type=float, default=0.95)
+    p.add_argument("--adaptive-boost-wd", type=float, default=3.0)
+    p.add_argument("--adaptive-trigger-acc", type=float, default=0.80)
 
     return p.parse_args()
 
