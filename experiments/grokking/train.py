@@ -55,6 +55,7 @@ class GrokTransformer(nn.Module):
         d_ff: int = 512,
         n_layers: int = 1,
         init_scale: float = 1.0,
+        fourier_init: bool = False,
     ):
         super().__init__()
         self.prime = prime
@@ -62,6 +63,19 @@ class GrokTransformer(nn.Module):
 
         self.embed = nn.Embedding(prime, d_model)
         self.pos_embed = nn.Embedding(2, d_model)
+
+        # Fourier initialization: seed embeddings with cos/sin at key frequencies
+        if fourier_init:
+            with torch.no_grad():
+                n_freqs = d_model // 2
+                for k in range(n_freqs):
+                    freq = (k + 1)  # frequency 1, 2, 3, ...
+                    for n in range(prime):
+                        angle = 2 * math.pi * freq * n / prime
+                        self.embed.weight[n, 2 * k] = math.cos(angle)
+                        self.embed.weight[n, 2 * k + 1] = math.sin(angle)
+                # Scale down to not dominate other random init
+                self.embed.weight.mul_(0.1)
 
         self.layers = nn.ModuleList([
             TransformerBlock(d_model, n_heads, d_ff) for _ in range(n_layers)
@@ -128,6 +142,7 @@ def train(args):
         d_ff=args.d_ff,
         n_layers=args.n_layers,
         init_scale=args.init_scale,
+        fourier_init=args.fourier_init,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -286,7 +301,7 @@ def parse_args():
 
     # Task
     p.add_argument("--prime", type=int, default=113)
-    p.add_argument("--operation", type=str, default="mul", choices=["add", "sub", "mul"])
+    p.add_argument("--operation", type=str, default="add", choices=["add", "sub", "mul"])
     p.add_argument("--data-fraction", type=float, default=0.5)
     p.add_argument("--data-seed", type=int, default=42)
 
@@ -296,6 +311,7 @@ def parse_args():
     p.add_argument("--d-ff", type=int, default=1024)
     p.add_argument("--n-layers", type=int, default=2)
     p.add_argument("--init-scale", type=float, default=1.0)
+    p.add_argument("--fourier-init", action="store_true", default=True)
 
     # Training
     p.add_argument("--total-steps", type=int, default=50000)
