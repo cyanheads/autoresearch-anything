@@ -195,6 +195,12 @@ def train(args):
     # ── Training loop ──
     model.train()
     for step in range(1, args.total_steps + 1):
+        # LR warmup
+        if args.warmup_steps > 0 and step <= args.warmup_steps:
+            lr = args.lr * step / args.warmup_steps
+            for pg in optimizer.param_groups:
+                pg["lr"] = lr
+
         # Sample batch
         idx = torch.randint(0, len(train_x), (args.batch_size,), device=device)
         batch_x, batch_y = train_x[idx], train_y[idx]
@@ -334,8 +340,9 @@ def parse_args():
     p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
-    p.add_argument("--weight-decay", type=float, default=2.5)
+    p.add_argument("--weight-decay", type=float, default=2.0)
     p.add_argument("--grad-clip", type=float, default=1.0)
+    p.add_argument("--warmup-steps", type=int, default=50)
     p.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "sgd"])
 
     # Grokking detection
