@@ -334,7 +334,7 @@ def parse_args():
     p.add_argument("--lr", type=float, default=3e-3)
     p.add_argument("--beta1", type=float, default=0.9)
     p.add_argument("--beta2", type=float, default=0.98)
-    p.add_argument("--weight-decay", type=float, default=0.1)
+    p.add_argument("--weight-decay", type=float, default=1.0)
     p.add_argument("--grad-clip", type=float, default=1.0)
     p.add_argument("--optimizer", type=str, default="adamw", choices=["adamw", "sgd"])
 
@@ -344,7 +344,7 @@ def parse_args():
                    help="Number of evaluation points during training")
 
     # Intervention
-    p.add_argument("--intervention", type=str, default="adaptive_wd",
+    p.add_argument("--intervention", type=str, default="none",
                    choices=["none", "wd_ramp", "wd_pulse", "norm_target",
                             "lr_spike", "gradient_noise", "spectral_reg",
                             "adaptive_wd", "perp_grad", "perp_grad_adaptive",
@@ -364,8 +364,8 @@ def parse_args():
     p.add_argument("--spectral-weight", type=float, default=0.001)
 
     # Adaptive WD params
-    p.add_argument("--adaptive-boost-wd", type=float, default=3.0)
-    p.add_argument("--adaptive-trigger-acc", type=float, default=0.80)
+    p.add_argument("--adaptive-boost-wd", type=float, default=2.0)
+    p.add_argument("--adaptive-trigger-acc", type=float, default=0.95)
 
     return p.parse_args()
 
