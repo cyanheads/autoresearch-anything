@@ -30,3 +30,31 @@ run.log
 program.md
 experiments/lm-heads/run.log
 experiments/lm-heads/results.tsv
+
+# --- weights, datasets & runtime artifacts (safety) ---
+# Model weights / serialized tensors — never commit
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.gguf
+*.onnx
+*.npz
+*.npy
+
+# Artifact / output / data directories
+checkpoints/
+ckpt/
+outputs/
+runs/
+logs/
+wandb/
+data/
+datasets/
+node_modules/
+.ipynb_checkpoints/
+.uv/
+
+# Logs (experiment runtime stdout/stderr/sweeps)
+*.log

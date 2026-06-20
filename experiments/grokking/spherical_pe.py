@@ -69,8 +69,9 @@ class RoPE(nn.Module):
     def apply_to_qk(self, q: torch.Tensor, k: torch.Tensor, offset: int = 0):
         """Apply rotary embeddings to queries and keys."""
         T = q.size(-2)
-        cos = self.cos_cache[offset:offset + T].unsqueeze(0).unsqueeze(0)  # [1, 1, T, d/2]
-        sin = self.sin_cache[offset:offset + T].unsqueeze(0).unsqueeze(0)
+        d_head = q.size(-1)
+        cos = self.cos_cache[offset:offset + T, :d_head // 2].unsqueeze(0).unsqueeze(0)
+        sin = self.sin_cache[offset:offset + T, :d_head // 2].unsqueeze(0).unsqueeze(0)
 
         def rotate(x):
             x1, x2 = x[..., ::2], x[..., 1::2]
@@ -115,18 +116,16 @@ class LearnedPlaneRoPE(nn.Module):
         return x
 
     def apply_to_qk(self, q: torch.Tensor, k: torch.Tensor, offset: int = 0):
-        Q = self._get_Q()  # [d, d]
         T = q.size(-2)
-        cos = self.cos_cache[offset:offset + T].unsqueeze(0).unsqueeze(0)
-        sin = self.sin_cache[offset:offset + T].unsqueeze(0).unsqueeze(0)
+        d_head = q.size(-1)
+        Q = self._get_Q()[:d_head, :d_head]  # [d_head, d_head]
+        cos = self.cos_cache[offset:offset + T, :d_head // 2].unsqueeze(0).unsqueeze(0)
+        sin = self.sin_cache[offset:offset + T, :d_head // 2].unsqueeze(0).unsqueeze(0)
 
         def rotate(x):
-            # Rotate into learned basis
-            x = x @ Q  # [B, H, T, d]
-            # Apply standard RoPE in that basis
+            x = x @ Q
             x1, x2 = x[..., ::2], x[..., 1::2]
             x = torch.stack([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1).flatten(-2)
-            # Rotate back
             x = x @ Q.T
             return x
 

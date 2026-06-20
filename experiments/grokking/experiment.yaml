@@ -65,7 +65,7 @@ immutable:
     reason: Reference material
 
 evaluate:
-  command: "cd experiments/grokking && CUDA_VISIBLE_DEVICES=1 uv run python train.py > run.log 2>&1"
+  command: "cd experiments/grokking && CUDA_VISIBLE_DEVICES=0 uv run python train.py > run.log 2>&1"
   timeout: 600
 
   metrics:
